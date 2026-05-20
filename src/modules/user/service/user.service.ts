@@ -18,6 +18,7 @@ import { SessionData } from "express-session";
 import { ROLES } from "src/common/constants/roles";
 import { ENV } from "src/common/constants/env";
 import { getEnv } from "src/utils/getEnv";
+import { ADMIN_EXCLUDED_PERMISSIONS, STAFF_ALLOWED_PERMISSIONS } from "src/common/constants/permissions";
 
 @Injectable()
 export class UserService {
@@ -61,9 +62,8 @@ export class UserService {
         };
     }
 
-    async createProfile(dto: CreateProfileDTO, companyId: number) {
+    async createProfile(dto: CreateProfileDTO, companyId: number, session: SessionData) {
         return this.em.transactional(async (em) => {
-
             const { roleId, permissionIds, ...userData } = dto;
 
             //1) Validate role
@@ -72,35 +72,62 @@ export class UserService {
             if (!role) {
                 throw new BadRequestException("Invalid role");
             }
-
-            //2) Validate permissions
-            let permissions: Permission[] = [];
             
-            if(role.name !== ROLES.ADMIN && permissionIds?.length === 0){
-                throw new BadRequestException("Provide at least one permission for user role")
+            //2) Prevent non-superAdmin from creating a superAdmin account
+            if (role.name === ROLES.SUPER_ADMIN && session.role !== ROLES.SUPER_ADMIN) {
+                throw new ForbiddenException("Only a superAdmin can create another superAdmin account");
             }
 
-            if(role.name !==  ROLES.ADMIN && permissionIds?.length) {
+            //3) Validate company early
+            const company = await em.findOne(Company, { id: companyId });
+
+            if (!company) {
+                throw new NotFoundException("Company not found");
+            }
+
+            //4) Validate & resolve permissions
+            let permissions: Permission[] = [];
+
+            if (role.name === ROLES.ADMIN) {
+                permissions = await em.find(Permission, {
+                    name: { $nin: ADMIN_EXCLUDED_PERMISSIONS }
+                });
+
+            } else if (role.name === ROLES.SUPER_ADMIN) {
+                permissions = await em.find(Permission, {
+                    name: { $in: STAFF_ALLOWED_PERMISSIONS }
+                });
+
+            } else {
+                if (!permissionIds?.length) {
+                    throw new BadRequestException("Provide at least one permission for user role");
+                }
+
                 const uniquePermissionIds = [...new Set(permissionIds)];
-                
+
                 const count = await em.count(Permission, {
                     id: { $in: uniquePermissionIds }
                 });
-                
+
                 if (count !== uniquePermissionIds.length) {
                     throw new BadRequestException("Invalid permissions provided");
                 }
 
-                permissions = uniquePermissionIds.map(id =>
-                    em.getReference(Permission, id)
-                );
+                if (role.name === ROLES.STAFF) {
+                    permissions = await em.find(Permission, {
+                        id:   { $in: uniquePermissionIds },
+                        name: { $in: STAFF_ALLOWED_PERMISSIONS }
+                    });
+                } else {
+                    permissions = uniquePermissionIds.map(id => em.getReference(Permission, id));
+                }
             }
 
-            //3) Hash password
+            //5) Hash password
             const dummyPassword = getEnv(ENV.CREATE_PROFILE_PASSWORD);
-            const passwordHash = await bcrypt.hash(dummyPassword,10);
+            const passwordHash = await bcrypt.hash(dummyPassword, 10);
             
-            //4) Create user
+            //6) Create user
             const user = em.create(User, {
                 ...userData,
                 password: passwordHash,
@@ -118,17 +145,9 @@ export class UserService {
                 }
             });
 
-            //5) Assign permissions
+            //7) Assign permissions
             if (permissions.length) {
                 user.permissions.set(permissions);
-            }
-
-            //6) Get the company
-            const company = await this.em.findOne(Company, { id: companyId });
-
-            //7) Throw error if company does not exist
-            if (!company) {
-            throw new NotFoundException("Company not found");
             }
 
             //8) Persist user
@@ -136,16 +155,16 @@ export class UserService {
 
             //9) Send out account creation email to user
             this.emailService.sendProfileCreatedByAdminEmail({
-            to: userData.email,
-            subject: "Your Account Has Been Created – Login Details",
-            template: "create-profile",
-            context: {
-                name: userData.firstName + " " + userData.lastName,
-                email: userData.email,
-                password: dummyPassword,
-                companyName: company.name,
-                loginUrl: `${process.env.FRONTEND_ORIGIN}/login`
-            }
+                to: userData.email,
+                subject: "Your Account Has Been Created – Login Details",
+                template: "create-profile",
+                context: {
+                    name: userData.firstName + " " + userData.lastName,
+                    email: userData.email,
+                    password: dummyPassword,
+                    companyName: company.name,
+                    loginUrl: `${process.env.FRONTEND_ORIGIN}/login`
+                }
             });
 
             //10) Return user

@@ -40,6 +40,11 @@ export async function seedEntities<T extends AnyEntity>(
     }
 
     if (missing.length) em.persist(missing);
+
+    if (config.afterCreate) {
+      await config.afterCreate(em, entityMap);
+    }
+    
     return entityMap;
   });
 }

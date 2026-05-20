@@ -24,7 +24,7 @@ export class User{
     email!: string;
 
     @Property({ nullable: true })
-    phoneNumber!: string;
+    phoneNumber?: string;
 
     @Property({ nullable: true, unique: true })
     username?: string;
@@ -39,13 +39,13 @@ export class User{
     profilePic?: string | null;
 
     @Property()
-    freightBroker!: boolean;
+    freightBroker?: boolean;
 
     @Property()
-    termsAndConditionAccepted!: boolean;
+    termsAndConditionAccepted?: boolean;
 
     @Property()
-    companyPolicyAccepted!: boolean;
+    companyPolicyAccepted?: boolean;
 
     @Property()
     emailIsVerified!: boolean;
@@ -74,8 +74,8 @@ export class User{
     @Property({ nullable: true })
     stripeCustomerId?: string;
 
-    @ManyToOne(() => Company)
-    company!: Company;
+    @ManyToOne(() => Company, { nullable: true })
+    company?: Company;
 
     @ManyToOne(() => Role)
     role!: Role
@@ -84,20 +84,20 @@ export class User{
     permissions = new Collection<Permission>(this)
 
     @OneToMany(() => Quote, quote => quote.createdBy)
-    quotes = new Collection<Quote>(this)
+    quotes? = new Collection<Quote>(this)
 
     @OneToMany(() => QuoteUserMeta, meta => meta.user)
-    quoteMeta = new Collection<QuoteUserMeta>(this);
+    quoteMeta? = new Collection<QuoteUserMeta>(this);
 
     @OneToMany(() => LineItemUnit, itemUnit => itemUnit.createdBy)
-    lineItemUnits = new Collection<LineItemUnit>(this);
+    lineItemUnits? = new Collection<LineItemUnit>(this);
 
     @OneToMany(() => Reminder, reminder => reminder.sendTo)
-    reminder = new Collection<Reminder>(this);
+    reminder? = new Collection<Reminder>(this);
 
     @OneToMany(() => Invoice, invoice => invoice.paidBy)
-    paidInvoices = new Collection<Invoice>(this);
+    paidInvoices? = new Collection<Invoice>(this);
 
     @OneToMany(() => Shipment, shipment => shipment.bookedBy, { hidden: true })
-    shipments = new Collection<Shipment>(this);
+    shipments? = new Collection<Shipment>(this);
 }

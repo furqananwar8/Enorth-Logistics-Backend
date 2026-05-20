@@ -3,28 +3,28 @@ import { IsBoolean, IsEmail, IsNotEmpty, IsOptional, IsString, Matches, MaxLengt
 export class UserDTO {
     @IsNotEmpty()
     @IsString()
-    firstName: string;
+    firstName!: string;
 
     @IsNotEmpty()
     @IsString()
-    lastName: string;
+    lastName!: string;
 
     @IsEmail()
     @IsString()
-    email: string;
+    email!: string;
 
     @IsNotEmpty()
     @IsString()
     @Matches(/^\+[1-9]\d{7,14}$/, {
         message: "Phone number must be in international format (e.g., +923001234567)"
     })
-    phoneNumber: string;
+    phoneNumber!: string;
 
     @IsNotEmpty()
     @IsString()
     @MinLength(2)
     @MaxLength(12)
-    username: string;
+    username!: string;
 
     @IsOptional()
     @IsString()
@@ -32,18 +32,18 @@ export class UserDTO {
     @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s])[^\s]{8,}$/, { 
         message: "newConfirmPassword must contain at least 8 characters, including uppercase, lowercase, number, and special character"
     })
-    password: string;
+    password!: string;
 
     @IsOptional()
     @IsString()
-    signupCode: string;
+    signupCode!: string;
 
     @IsBoolean()
-    termsAndConditionAccepted: boolean;
+    termsAndConditionAccepted!: boolean;
 
     @IsBoolean()
-    companyPolicyAccepted: boolean;
+    companyPolicyAccepted!: boolean;
 
     @IsBoolean()
-    freightBroker: boolean;
+    freightBroker!: boolean;
 }

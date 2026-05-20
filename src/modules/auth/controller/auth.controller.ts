@@ -18,7 +18,7 @@ export class AuthController {
 
       req.session.userId = user.id;
       req.session.role = user.role.name;
-      req.session.companyId = user.company.id;
+      req.session.companyId = user?.company?.id;
 
       return {
          message: "Signup successfull",
@@ -32,7 +32,7 @@ export class AuthController {
 
       req.session.userId = user.id;
       req.session.role = user.role.name;
-      req.session.companyId = user.company.id;
+      req.session.companyId = user?.company?.id;
       req.session.permissions = (user as any).routePermissions;
 
       if(dto.rememberMe) req.session.cookie.maxAge = REMEMBER_ME_COOKIE_30DAY_EXPIRY;

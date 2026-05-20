@@ -4,14 +4,13 @@ import { seedSignatures } from "./signature.seeder";
 import { seedPermissions } from "./permission.seeder";
 import { seedRoles } from "./role.seeder";
 
-
 export async function runSeeders(em: EntityManager) {
-  // 1. Seed permissions first
+  //1) Seed permissions first
   const permissionMap = await seedPermissions(em);
   
-  // 2. Seed roles with permission map for assignment
+  //2) Seed roles with permission map for assignment
   await seedRoles(em, permissionMap);
-  
+
   //3) Seed signature options
   await seedSignatures(em);
 

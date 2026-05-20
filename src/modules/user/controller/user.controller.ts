@@ -31,12 +31,12 @@ export class UserController {
     }
 
     @UseGuards(SessionAuthGuard, RolesGuard)
-    @Role([ROLES.ADMIN])
+    @Role([ROLES.ADMIN, ROLES.SUPER_ADMIN])
     @Post("/")
-    async CreateProfile(@Body() dto: CreateProfileDTO, @Req() request: Request){
+    async CreateProfile(@Body() dto: CreateProfileDTO, @Req() request: Request, @Session() session: SessionData){
         const companyId = request.session.companyId as number;
         
-        await this.userService.createProfile(dto, companyId);
+        await this.userService.createProfile(dto, companyId, session);
         
         return {
             message: "Profile created successfully"
@@ -44,7 +44,7 @@ export class UserController {
     }
 
     @UseGuards(SessionAuthGuard, RolesGuard)
-    @Role([ROLES.ADMIN])
+    @Role([ROLES.ADMIN, ROLES.SUPER_ADMIN])
     @Get("/")
     async GetAllProfiles(@CurrentUser() userId: number, @Session() session: SessionData){
         return this.userService.getAllProfiles(userId, session);
@@ -52,7 +52,7 @@ export class UserController {
 
 
     @UseGuards(SessionAuthGuard, RolesGuard)
-    @Role([ROLES.ADMIN])
+    @Role([ROLES.ADMIN, ROLES.SUPER_ADMIN])
     @Delete("/:id")
     async DeleteProfile(@Session() session: SessionData, @Param("id") userId: number){
         const companyId = session.companyId as number;
@@ -89,7 +89,7 @@ export class UserController {
     }
 
     @UseGuards(SessionAuthGuard, RolesGuard)
-    @Role([ROLES.ADMIN])
+    @Role([ROLES.ADMIN, ROLES.SUPER_ADMIN])
     @Patch("/:id")
     async UpdateProfile(@Body() dto: UpdateProfileByAdminDTO,@Session() session: SessionData, @Param("id") userId: number, @CurrentUser() loggedInUserId: number){
         return this.userService.updateProfileByAdmin(dto, session, userId, loggedInUserId);

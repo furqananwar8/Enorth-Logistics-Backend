@@ -47,6 +47,7 @@ import { EmailService } from "src/email/service/email.service";
 import { getEmailTemplate } from "src/utils/get-email-template";
 import { ShipmentTypeLabel } from "src/utils/shipment-type-label-mapping";
 import { RequestContextService } from "src/utils/request-context-service";
+import { ROLES } from "src/common/constants/roles";
 @Injectable()
 export class QuoteService {
     constructor(
@@ -714,10 +715,15 @@ export class QuoteService {
 
     async getSingleAgainstCurrentUserCompany(quoteId: number, session: SessionData):Promise<any>{
         //1) Get the quote against current user
-        const quote = await this.em.findOne(Quote, {
-            id: quoteId,
-            company: this.em.getReference(Company, session.companyId as number)
-        },{
+        const filter: any = {
+            id: quoteId
+        };
+
+        if (session.role !== ROLES.SUPER_ADMIN) {
+            filter.company = this.em.getReference(Company, session.companyId as number);
+        }
+        
+        const quote = await this.em.findOne(Quote, filter,{
             populate: ["createdBy","createdBy.firstName", "createdBy.lastName","addresses", "addresses.locationType", "addresses.addressBookEntry", "addresses.addressBookEntry.address", "addresses.address","lineItems", "lineItems.units",
                         "palletServices", "spotFtlServices", "spotLtlServices", "standardFTLService", 
                         "signature", "insurance","spotDetails", "spotDetails.spotContact", "spotDetails.spotEquipment","shipment", "shipment.trackingEvents", "shipment.surcharges"]
@@ -784,9 +790,11 @@ export class QuoteService {
         const { search, page, limit, orderBy } = buildQuery(params, allowedFields);
         
         // 3) Base filter — always scope to the caller's company
-        const filter: any = {
-            company: this.em.getReference(Company, session.companyId as number),
-        };
+        const filter: any = {};
+
+        if (session.role !== ROLES.SUPER_ADMIN) {
+            filter.company = this.em.getReference(Company, session.companyId as number);
+        }
         
         // 4) Optional status filter
         if (params?.status) {

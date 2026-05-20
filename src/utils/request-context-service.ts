@@ -37,7 +37,7 @@ export class RequestContextService {
       throw new BadRequestException('Invalid user');
     }
 
-    if (user.company.id !== companyId) {
+    if (user?.company?.id !== companyId) {
       throw new ForbiddenException('User does not belong to company');
     }
 

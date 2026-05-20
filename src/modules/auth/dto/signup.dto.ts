@@ -9,20 +9,20 @@ export class SignupDTO {
     @IsNotEmpty()
     @ValidateNested()
     @Type(() => UserDTO)
-    user: UserDTO
+    user!: UserDTO
 
     @IsNotEmpty()
     @ValidateNested()
     @Type(() => CompanyDTO)
-    company: CompanyDTO
+    company!: CompanyDTO
 
     @IsNotEmpty()
     @ValidateNested()
     @Type(() => AddressDTO)
-    address: AddressDTO
+    address!: AddressDTO
 
     @IsNotEmpty()
     @ValidateNested()
     @Type(() => CompanyShippingPreferenceEntity)
-    shippingPreference: CompanyShippingPreferenceEntity[]
+    shippingPreference!: CompanyShippingPreferenceEntity[]
 }

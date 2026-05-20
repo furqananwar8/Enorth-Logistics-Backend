@@ -38,7 +38,7 @@ export class SessionAuthGuard implements CanActivate {
 
         request.session.userId = user.id;
         request.session.role = user.role.name;
-        request.session.companyId = user.company.id;
+        request.session.companyId = user?.company?.id;
         request.session.permissions =  user.permissions.getItems().map(p => p.name);
 
         return true;
