@@ -171,7 +171,7 @@ export class PaymentService {
     }
 
     // Get or create wallet
-    const wallet = await this.getOrCreateWallet(ctx.user);
+    const wallet = await this.getOrCreateWallet(ctx.company);
 
     // Verify payment method belongs to user (security check)
     const savedCard = await this.em.findOne(SavedCard, {
