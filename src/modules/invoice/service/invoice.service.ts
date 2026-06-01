@@ -90,7 +90,7 @@ export class InvoiceService {
       .leftJoin('qa.addressBookEntry', 'abe')
       .leftJoin('abe.address', 'abea')
       .leftJoin('s.bookedBy', 'b')
-      .where({ 'i.company': ctx.company.id });
+      .where({ 'i.company': ctx?.company?.id });
 
     // Date range
     if (queryParams.startDate) {

@@ -8,6 +8,7 @@ import { Wallet } from './wallet.entity';
 import { SavedCard } from './saved-card.entity';
 import { Invoice } from './invoice.entity';
 import { Shipment } from './shipment.entity';
+import { Claim } from './claim.entity';
 
 @Entity()
 export class Company{
@@ -46,4 +47,7 @@ export class Company{
 
     @OneToMany(() => Shipment, shipment => shipment.company, { nullable: true })
     shipments = new Collection<Invoice>(this);
+
+    @OneToMany(() => Claim, claim => claim.company, { nullable: true })
+    claims? = new Collection<Claim>(this)
 }

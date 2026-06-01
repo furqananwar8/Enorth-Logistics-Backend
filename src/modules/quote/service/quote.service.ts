@@ -121,7 +121,7 @@ export class QuoteService {
                     currency: dto.estimatedAmount?.currency,
                     measurementUnit: quote.lineItems.measurementUnit,
                     createdAt: createdAtFormatted,
-                    companyName: ctx.company.name,
+                    companyName: ctx?.company?.name,
                     contactNumber: ctx.user.phoneNumber,
                     createdBy: `${ctx.user?.firstName} ${ctx.user?.lastName}`,
                     lineItemUnits: quote.lineItems.units

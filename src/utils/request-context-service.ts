@@ -1,12 +1,13 @@
 import { EntityManager } from "@mikro-orm/core";
 import { Injectable, UnauthorizedException, BadRequestException, ForbiddenException } from "@nestjs/common";
 import { SessionData } from "express-session";
+import { ROLES } from "src/common/constants/roles";
 import { Company } from "src/entities/company.entity";
 import { User } from "src/entities/user.entity";
 
 export interface RequestContext {
   user: User;
-  company: Company;
+  company: Company | null;
   permissions: any[];
 }
 
@@ -22,8 +23,9 @@ export class RequestContextService {
   async resolve({session, em}: RequestContextServiceParams ): Promise<RequestContext> {
     const userId = session.userId;
     const companyId = session.companyId;
+    const isAdminOrStaff = session.role === ROLES.SUPER_ADMIN || session.role === ROLES.STAFF;
 
-    if (!userId || !companyId) {
+    if (!userId || (!companyId && !isAdminOrStaff)) {
       throw new UnauthorizedException('Invalid session');
     }
 
@@ -37,13 +39,15 @@ export class RequestContextService {
       throw new BadRequestException('Invalid user');
     }
 
-    if (user?.company?.id !== companyId) {
+    if (!isAdminOrStaff && user?.company?.id !== companyId) {
       throw new ForbiddenException('User does not belong to company');
     }
 
-    const company = await em.findOne(Company, { id: companyId });
+    const company = isAdminOrStaff 
+      ? (user.company ?? null) 
+      : await em.findOne(Company, { id: companyId }) as any;
 
-    if (!company) {
+    if (!isAdminOrStaff && !company) {
       throw new BadRequestException('Invalid company');
     }
 

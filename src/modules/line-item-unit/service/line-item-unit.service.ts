@@ -12,6 +12,7 @@ import { GetAllAgainstCurrentUserQueryParams } from '../controller/line-item-uni
 import { hasValidField } from 'src/utils/has-valid-fields';
 import { SessionData } from 'express-session';
 import { RequestContextService } from 'src/utils/request-context-service';
+import { Company } from 'src/entities/company.entity';
 
 @Injectable()
 export class LineItemUnitService {
@@ -62,7 +63,7 @@ export class LineItemUnitService {
         //8) Set line item null
         unit.lineItem = undefined; // Explicitly standalone
         unit.createdBy = ctx.user;
-        unit.company = ctx.company;
+        unit.company = ctx.company as Company;
 
         //9) Persist changes
         await this.em.persist(unit).flush();

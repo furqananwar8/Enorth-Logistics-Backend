@@ -32,6 +32,7 @@ import { PaymentModule } from './modules/payment/payment.module';
 import { MockCarrierTrackingModule } from './modules/mock-carrier-tracking/mock-carrier-tracking.module';
 import { SurchargeModule } from './modules/surcharge/surcharge.module';
 import { InvoiceModule } from './modules/invoice/invoice.module';
+import { ClaimModule } from './modules/claim/claim.module';
 
 @Module({
   imports: [
@@ -67,7 +68,8 @@ import { InvoiceModule } from './modules/invoice/invoice.module';
     PaymentModule,
     MockCarrierTrackingModule,
     SurchargeModule,
-    InvoiceModule
+    InvoiceModule,
+    ClaimModule
   ],
   controllers: [AppController],
   providers: [AppService],

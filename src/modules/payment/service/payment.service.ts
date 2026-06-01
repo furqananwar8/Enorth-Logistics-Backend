@@ -155,7 +155,7 @@ export class PaymentService {
       throw new BadRequestException('No Stripe customer found for user');
     }
 
-    const card = ctx.company.savedCards.find((card) => card.id === payload.cardId)
+    const card = ctx?.company?.savedCards.find((card) => card.id === payload.cardId)
 
     if(!card){
       throw new BadRequestException('Invalid cardId')
