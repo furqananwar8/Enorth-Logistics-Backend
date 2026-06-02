@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -54,6 +55,13 @@ export class ClaimController {
             documentType: body.documentType,
             }
         };
+    }
+
+    @UseGuards(SessionAuthGuard, RolesGuard)
+    @Role([ROLES.ADMIN, ROLES.USER])
+    @Delete('documents/:documentId')
+    async deleteDocument(@Param('documentId') documentId: number) {
+        return  this.claimsService.deleteDocument(documentId);
     }
 
     @UseGuards(SessionAuthGuard)

@@ -19,6 +19,8 @@ import { RequestContextService } from 'src/utils/request-context-service';
 import { ClaimDocument } from 'src/entities/claim-document.entity';
 import { allowedTransitions } from 'src/common/constants/claim';
 import { UpdateClaimStatusDto } from '../dto/update-claim-status.dto';
+import { join } from 'path';
+import fs from 'fs/promises';
 
 
 @Injectable()
@@ -382,5 +384,41 @@ export class ClaimService {
       message: `Claim status updated to ${next}`,
       claim: this.serializeClaim(claim),
     };
+  }
+
+  async deleteDocument(documentId: number) {
+    //1) Fetch document and populate claim for ownership check
+    const document = await this.em.findOne(
+      ClaimDocument,
+      { id: documentId },
+      { populate: ['claim', 'claim.submittedBy'] },
+    );
+
+    if (!document) {
+      throw new NotFoundException('Document not found');
+    }
+
+    //2). unlink from disk (do not await)
+    const filename = document.fileUrl.split('/').pop();
+    if (filename) {
+    const filePath = join(process.cwd(), 'uploads', 'claims', filename);
+    
+    //3) Just await it — single file unlink is ~1-5ms on local disk
+    try {
+      await fs.unlink(filePath);
+    } catch (err: any) {
+      if (err.code !== 'ENOENT') {
+        throw new BadRequestException('Failed to delete claim document. Try again later')
+      }
+    }
+  }
+    // 4. Delete the DB record and flush
+    this.em.remove(document);
+    await this.em.flush();
+
+    //5) Return back success response
+    return {
+      message: "Successfully removed document"
+    }
   }
 }

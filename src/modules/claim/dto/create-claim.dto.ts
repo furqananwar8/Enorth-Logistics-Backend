@@ -1,5 +1,6 @@
+import { Type } from 'class-transformer';
 import {
-    IsArray,
+  IsArray,
   IsBoolean,
   IsEmail,
   IsEnum,
@@ -9,11 +10,32 @@ import {
   IsString,
   Min,
   ValidateIf,
+  ValidateNested,
 } from 'class-validator';
 import { ClaimDocumentType, ClaimStatus, ClaimType } from 'src/common/enum/claims';
 import { Currency } from 'src/common/enum/currency.enum';
-import { User } from 'src/entities/user.entity';
 
+export class CreateClaimDocumentDto {
+  @IsString()
+  @IsNotEmpty()
+  fileName!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  fileUrl!: string;
+
+  @IsOptional()
+  @IsString()
+  mimeType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  fileSize?: number;
+
+  @IsEnum(ClaimDocumentType)
+  documentType!: ClaimDocumentType;
+}
 
 export class CreateClaimDto {
   @IsNumber()
@@ -21,14 +43,17 @@ export class CreateClaimDto {
 
   @IsOptional()
   @IsEnum(ClaimDocumentType)
-  documentType?: ClaimDocumentType
-  
+  documentType?: ClaimDocumentType;
+
   @IsOptional()
   @IsArray()
-  documents?: Record<string, any>[];
+  @ValidateNested({ each: true })
+  @Type(() => CreateClaimDocumentDto)
+  documents?: CreateClaimDocumentDto[];
 
   @IsEnum(ClaimStatus)
   status!: ClaimStatus;
+
   // --- Contact Person ---
   @IsString()
   @IsNotEmpty()
@@ -53,7 +78,6 @@ export class CreateClaimDto {
   @IsBoolean()
   additionalInsurancePurchased!: boolean;
 
-  
   @IsEnum(Currency)
   currency!: Currency;
 
