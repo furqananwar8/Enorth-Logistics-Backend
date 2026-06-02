@@ -142,6 +142,7 @@ export class TrackingService {
             "shipment.trackingNumber",
             "shipment.shipDate",
             "shipment.currentStatus",
+            "shipment.carrier",
 
             // Line items
             "lineItems.id",
