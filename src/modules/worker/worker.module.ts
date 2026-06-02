@@ -8,6 +8,7 @@ import { RedisModule } from 'src/shared/redis/redis.module';
 import { REDIS_CLIENT } from 'src/shared/redis/redis.module';
 import Redis from 'ioredis';
 import { MikroOrmModule } from '@mikro-orm/nestjs';
+import { ClaimDocumentWorkerModule } from '../claim/claim-document-worker.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { MikroOrmModule } from '@mikro-orm/nestjs';
     }),
     ReminderModule,
     NotificationsModule,
+    ClaimDocumentWorkerModule,
   ],
   providers: [ReminderWorker],
 })

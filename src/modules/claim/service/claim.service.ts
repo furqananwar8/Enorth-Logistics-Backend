@@ -21,11 +21,18 @@ import { allowedTransitions } from 'src/common/constants/claim';
 import { UpdateClaimStatusDto } from '../dto/update-claim-status.dto';
 import { join } from 'path';
 import fs from 'fs/promises';
+import { UpdateClaimDTO } from '../dto/update-clain.dto';
+import { Queue } from 'bullmq';
+import { InjectQueue } from '@nestjs/bullmq';
 
 
 @Injectable()
 export class ClaimService {
-  constructor(private readonly em: EntityManager, private readonly requestContextService: RequestContextService) {}
+  constructor(
+    private readonly em: EntityManager, 
+    private readonly requestContextService: RequestContextService,
+    @InjectQueue('claim-document-cleanup') private readonly cleanupQueue: Queue
+  ) {}
 
   private serializeClaim(claim: Claim) {
   return {
@@ -42,9 +49,6 @@ export class ClaimService {
     currency: claim.currency,
     goodsDescription: claim.goodsDescription,
     totalValueOfGoods: claim.totalValueOfGoods,
-    totalValueOfMissingGoods: claim.totalValueOfMissingGoods,
-    damageDescription: claim.damageDescription,
-    valueOfDamageClaimed: claim.valueOfDamageClaimed,
     additionalNotes: claim.additionalNotes,
     createdAt: claim.createdAt,
     updatedAt: claim.updatedAt,
@@ -129,6 +133,10 @@ export class ClaimService {
       throw new BadRequestException('A claim already exists for this shipment.');
     }
 
+    if(![ClaimStatus.DRAFT, ClaimStatus.SUBMITTED].includes(dto.status)) {
+      throw new BadRequestException('Claim status can be draft or submitted only');
+    }
+
     // --- Build claim ---
     const claim = new Claim();
     claim.shipment = shipment;
@@ -144,19 +152,11 @@ export class ClaimService {
 
     claim.additionalInsurancePurchased = dto.additionalInsurancePurchased;
     claim.currency = dto.currency;
-
-    if (dto.claimType === ClaimType.MISSING) {
-      claim.goodsDescription = dto.goodsDescription;
-      claim.totalValueOfGoods = dto.totalValueOfGoods;
-      claim.totalValueOfMissingGoods = dto.totalValueOfMissingGoods;
-      if (dto.additionalNotes) claim.additionalNotes = dto.additionalNotes;
-    }
-
-    if (dto.claimType === ClaimType.DAMAGED) {
-      claim.damageDescription = dto.damageDescription;
-      claim.valueOfDamageClaimed = dto.valueOfDamageClaimed;
-    }
-
+    claim.totalValueOfGoods = dto.totalValueOfGoods;
+    claim.goodsDescription = dto.goodsDescription;
+    
+    if (dto.claimType === ClaimType.MISSING && dto.additionalNotes) claim.additionalNotes = dto.additionalNotes;
+    
     // --- Attach documents (URIs from DTO) ---
     if (dto.documents?.length) {
       const docs = dto.documents.map((docDto) => {
@@ -420,5 +420,108 @@ export class ClaimService {
     return {
       message: "Successfully removed document"
     }
+  }
+
+  async update(claimId: number, dto: UpdateClaimDTO, session: SessionData) {
+    const ctx = await this.requestContextService.resolve({ session, em: this.em });
+
+    const claim = await this.em.findOne(
+      Claim,
+      { id: claimId },
+      { populate: ['documents', 'company'] },
+    );
+
+    if (!claim) throw new NotFoundException('Claim not found');
+
+    if (claim.company.id !== ctx?.company?.id) {
+      throw new ForbiddenException('You do not have permission to update this claim.');
+    }
+
+    // Early return if nothing to update
+    const scalarFields = [
+      'contactFullName',
+      'contactPhoneNumber',
+      'contactEmailAddress',
+      'claimName',
+      'additionalInsurancePurchased',
+      'currency',
+      'goodsDescription',
+      'totalValueOfGoods',
+      'claimType',
+    ] as const;
+
+    const hasScalarUpdate = scalarFields.some(
+      (field) => dto[field] !== undefined,
+    );
+
+    const hasAdditionalNotes = dto.additionalNotes !== undefined;
+    const hasDocuments = dto.documents !== undefined;
+
+    if (!hasScalarUpdate && !hasAdditionalNotes && !hasDocuments) {
+      return { message: 'Claim updated successfully', claim };
+    }
+
+    // --- Update scalar fields ---
+    for (const field of scalarFields) {
+      if (dto[field] !== undefined) {
+        (claim as any)[field] = dto[field];
+      }
+    }
+
+    // --- Handle additionalNotes ---
+    if (dto.claimType !== undefined && dto.claimType !== ClaimType.MISSING) {
+      claim.additionalNotes = null;
+    } else if (dto.additionalNotes !== undefined) {
+      claim.additionalNotes = dto.additionalNotes;
+    }
+
+    // --- Diff documents (if provided) ---
+    if (dto.documents !== undefined) {
+      const existingDocs = claim.documents.getItems();
+      const newDocUrls = new Set(dto.documents.map((d) => d.fileUrl));
+      const existingUrls = new Set(existingDocs.map((d) => d.fileUrl));
+
+      // 1. Documents to remove: exist in DB but not in new DTO
+      const docsToRemove = existingDocs.filter((doc) => !newDocUrls.has(doc.fileUrl));
+
+      for (const doc of docsToRemove) {
+        // Queue disk deletion for 10 minutes later
+        const filename = doc.fileUrl.split('/').pop();
+        if (filename) {
+          const filePath = join(process.cwd(), 'uploads', 'claims', filename);
+          await this.cleanupQueue.add(
+            'delete-file',
+            { filePath },
+            { delay: 1 * 60 * 1000 }, // 10 minutes
+          );
+        }
+
+        // Remove from collection immediately (cascade handles DB)
+        claim.documents.remove(doc);
+      }
+
+      // 2. Documents to add: exist in DTO but not in DB
+      const docsToAdd = dto.documents.filter((docDto) => !existingUrls.has(docDto.fileUrl));
+
+      if (docsToAdd.length) {
+        const newDocs = docsToAdd.map((docDto) => {
+          const doc = new ClaimDocument();
+          doc.fileUrl = docDto.fileUrl;
+          doc.fileName = docDto.fileName;
+          doc.mimeType = docDto.mimeType;
+          doc.fileSize = docDto.fileSize;
+          doc.documentType = docDto.documentType;
+          doc.claim = claim;
+          doc.uploadedBy = ctx.user;
+          return doc;
+        });
+
+        claim.documents.add(newDocs);
+      }
+    }
+
+    await this.em.flush();
+
+    return { message: 'Claim updated successfully', claim };
   }
 }

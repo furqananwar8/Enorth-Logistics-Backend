@@ -8,6 +8,7 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Put,
   Query,
   Session,
   UploadedFile,
@@ -25,6 +26,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { claimDocsMulterConfig } from 'src/config/multer.config';
 import { UpdateClaimStatusDto } from '../dto/update-claim-status.dto';
 import { UploadClaimDocumentDTO } from '../dto/upload-claim.dto';
+import { UpdateClaimDTO } from '../dto/update-clain.dto';
 
 
 @Controller('claims')
@@ -40,6 +42,13 @@ export class ClaimController {
 
     @UseGuards(SessionAuthGuard, RolesGuard)
     @Role([ROLES.ADMIN, ROLES.USER])
+    @Put(':claimId')
+    async update(@Param('claimId') claimId: number, @Body() dto: UpdateClaimDTO, @Session() session: SessionData) {
+        return this.claimsService.update(claimId, dto, session);
+    }
+
+    @UseGuards(SessionAuthGuard, RolesGuard)
+    @Role([ROLES.ADMIN, ROLES.USER])
     @Post('upload-documents')
     @UseInterceptors(FileInterceptor('file', claimDocsMulterConfig))
     uploadClaimDocuments(@UploadedFile() file: Express.Multer.File,  @Body() body: UploadClaimDocumentDTO,) {
@@ -47,13 +56,13 @@ export class ClaimController {
 
         return {
             message: 'File uploaded successfully',
-            document: {
+            document: [{
             fileUrl: `/uploads/claims/${file.filename}`,
             fileName: file.originalname,
             mimeType: file.mimetype,
             fileSize: file.size,
             documentType: body.documentType,
-            }
+            }]
         };
     }
 

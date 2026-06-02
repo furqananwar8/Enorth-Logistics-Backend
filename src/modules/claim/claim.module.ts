@@ -2,9 +2,14 @@ import { Module } from "@nestjs/common";
 import { ClaimService } from "./service/claim.service";
 import { ClaimController } from "./controller/claim.controller";
 import { RequestContextService } from "src/utils/request-context-service";
+import { BullModule } from "@nestjs/bullmq";
 
 @Module({
-    imports: [],
+    imports: [
+    BullModule.registerQueue({
+      name: 'claim-document-cleanup',
+    }),
+  ],
     controllers: [ClaimController],
     providers: [ClaimService, RequestContextService]
 })

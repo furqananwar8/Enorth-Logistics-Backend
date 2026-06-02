@@ -23,7 +23,7 @@ export class ClaimDocument {
   @Enum(() => ClaimDocumentType)
   documentType!: ClaimDocumentType;
 
-  @ManyToOne(() => Claim, { hidden: true })
+  @ManyToOne(() => Claim, { hidden: true, deleteRule: 'cascade' })
   claim!: Claim;
 
   @ManyToOne(() => User, { hidden: true})

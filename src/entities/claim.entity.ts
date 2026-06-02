@@ -60,21 +60,11 @@ export class Claim {
   @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
   totalValueOfGoods?: number;
 
-  @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
-  totalValueOfMissingGoods?: number;
-
   @Property({ type: 'text', nullable: true, default: null })
   additionalNotes?: string | null = null;
 
-  // === Damaged ===
-  @Property({ type: 'text', nullable: true })
-  damageDescription?: string;
-
-  @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
-  valueOfDamageClaimed?: number;
-
   // --- Documents ---
-  @OneToMany(() => ClaimDocument, claimDocument=> claimDocument.claim, { cascade: [Cascade.ALL]})
+  @OneToMany(() => ClaimDocument, claimDocument=> claimDocument.claim, { cascade: [Cascade.ALL], orphanRemoval: true})
   documents = new Collection<ClaimDocument>(this);
 
   // --- Timestamps ---

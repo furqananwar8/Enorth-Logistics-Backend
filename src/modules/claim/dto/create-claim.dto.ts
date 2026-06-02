@@ -92,24 +92,9 @@ export class CreateClaimDto {
   @Min(0)
   totalValueOfGoods?: number;
 
-  @ValidateIf((o) => o.claimType === ClaimType.MISSING)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  totalValueOfMissingGoods?: number;
 
   @ValidateIf((o) => o.claimType === ClaimType.MISSING)
   @IsString()
   @IsOptional()
   additionalNotes?: string;
-
-  // --- Damaged only ---
-  @ValidateIf((o) => o.claimType === ClaimType.DAMAGED)
-  @IsString()
-  @IsNotEmpty()
-  damageDescription?: string;
-
-  @ValidateIf((o) => o.claimType === ClaimType.DAMAGED)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  valueOfDamageClaimed?: number;
 }
