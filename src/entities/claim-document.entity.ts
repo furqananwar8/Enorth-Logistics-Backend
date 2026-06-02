@@ -20,6 +20,9 @@ export class ClaimDocument {
   @Property({ nullable: true })
   fileSize?: number;
 
+  @Enum(() => ClaimDocumentType)
+  documentType!: ClaimDocumentType;
+
   @ManyToOne(() => Claim, { hidden: true })
   claim!: Claim;
 

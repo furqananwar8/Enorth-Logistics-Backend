@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -8,7 +9,7 @@ import {
   Post,
   Query,
   Session,
-  UploadedFiles,
+  UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -19,9 +20,10 @@ import { RolesGuard } from 'src/guards/roles.guard';
 import { ROLES } from 'src/common/constants/roles';
 import { Role } from "src/decorators/role.decorator";
 import { ClaimService } from '../service/claim.service';
-import { FilesInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { claimDocsMulterConfig } from 'src/config/multer.config';
 import { UpdateClaimStatusDto } from '../dto/update-claim-status.dto';
+import { UploadClaimDocumentDTO } from '../dto/upload-claim.dto';
 
 
 @Controller('claims')
@@ -38,17 +40,19 @@ export class ClaimController {
     @UseGuards(SessionAuthGuard, RolesGuard)
     @Role([ROLES.ADMIN, ROLES.USER])
     @Post('upload-documents')
-    @UseInterceptors(FilesInterceptor('files', 10, claimDocsMulterConfig))
-    uploadClaimDocuments(@UploadedFiles() files: Express.Multer.File[]) {
-        const documents = files.map((file) => ({
+    @UseInterceptors(FileInterceptor('file', claimDocsMulterConfig))
+    uploadClaimDocuments(@UploadedFile() file: Express.Multer.File,  @Body() body: UploadClaimDocumentDTO,) {
+        if (!file) throw new BadRequestException('File missing, please attach file in request');
+
+        return {
+            message: 'File uploaded successfully',
+            document: {
             fileUrl: `/uploads/claims/${file.filename}`,
             fileName: file.originalname,
             mimeType: file.mimetype,
-        }));
-
-        return {
-            message: 'Files uploaded successfully',
-            documents,
+            fileSize: file.size,
+            documentType: body.documentType,
+            }
         };
     }
 

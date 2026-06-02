@@ -157,17 +157,12 @@ export class ClaimService {
 
     // --- Attach documents (URIs from DTO) ---
     if (dto.documents?.length) {
-      if (!dto.documentType) {
-        throw new BadRequestException("documentType is required")
-      }
-
-      claim.documentType = dto.documentType;
-
       const docs = dto.documents.map((docDto) => {
         const doc = new ClaimDocument();
         doc.fileUrl = docDto.fileUrl;
         doc.fileName = docDto.fileName;
         doc.mimeType = docDto.mimeType;
+        doc.documentType = docDto.documentType;
         doc.claim = claim;
         doc.uploadedBy = ctx.user;
         return doc;

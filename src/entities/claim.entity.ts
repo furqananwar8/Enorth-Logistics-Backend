@@ -73,10 +73,6 @@ export class Claim {
   @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
   valueOfDamageClaimed?: number;
 
-  
-  @Enum(() => ClaimDocumentType)
-  documentType?: ClaimDocumentType;
-
   // --- Documents ---
   @OneToMany(() => ClaimDocument, claimDocument=> claimDocument.claim, { cascade: [Cascade.ALL]})
   documents = new Collection<ClaimDocument>(this);
