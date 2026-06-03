@@ -20,6 +20,7 @@ import { ENV } from "src/common/constants/env";
 import { getEnv } from "src/utils/getEnv";
 import { ADMIN_EXCLUDED_PERMISSIONS, STAFF_ALLOWED_PERMISSIONS } from "src/common/constants/permissions";
 import { AccountReviewAction } from "src/common/constants/user";
+import { buildQuery } from "src/utils/api-query";
 
 @Injectable()
 export class UserService {
@@ -329,6 +330,81 @@ export class UserService {
         return {
             message: "Profiles retrieved successfully",
             users
+        };
+    }
+
+    async getAllUnVerifiedAccounts(params: Record<string, any>) {
+        // 1) Specify fields allowed for search and filters
+        const allowedFields: Record<string, string> = {
+            firstName: 'firstName',
+            lastName: 'lastName',
+            email: 'email',
+            username: 'username',
+            id: 'id',
+        };
+
+        // 2) Pass query params and allowed fields to build query pagination params
+        const { search, page, limit, orderBy } = buildQuery(params, allowedFields);
+
+        // 3) Build filter query
+        const filter: any = {};
+
+        filter.accountIsVerified = false;
+        // ── NEW: Exclude admin / staff / superAdmin roles ──
+        const excludedRoles = await this.em.find(
+            Role,
+            { name: { $in: [ROLES.SUPER_ADMIN, ROLES.STAFF] } },
+            { fields: ['id'] },
+        );
+
+        if (excludedRoles.length) {
+            filter.role = { $nin: excludedRoles };
+        }
+
+        // 4) Handle search filter (searches across firstName, lastName, email)
+        if (search) {
+            filter.$or = [
+                { firstName: { $ilike: `${search}%` } },
+                { lastName: { $ilike: `${search}%` } },
+                { email: { $ilike: `${search}%` } },
+            ];
+        }
+
+        // 5) Count total users and pages
+        const total = await this.em.count(User, filter);
+        const totalPages = Math.ceil(total / limit) || 1;
+
+        // 6) Clamp page based on default limit and total user pages
+        const clampedPage = Math.min(page, totalPages);
+        const offset = (clampedPage - 1) * limit;
+
+        // 7) Fetch data
+        const users = await this.em.find(
+            User,
+            filter,
+            {
+                limit,
+                offset,
+                orderBy: Object.entries(orderBy).map(([field, direction]) => ({
+                    [field]: direction,
+                })),
+                populate: ['role', 'company'],
+            },
+        );
+
+        // 8) Return success response
+        return {
+            message: 'Users retrieved successfully',
+            data: users,
+            meta: {
+                total,
+                page,
+                limit,
+                totalPages,
+                hasNextPage: clampedPage < totalPages,
+                hasPrevPage: clampedPage > 1,
+                sort: orderBy,
+            },
         };
     }
 

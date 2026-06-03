@@ -63,6 +63,12 @@ export class UserController {
         return this.userService.getAllProfiles(userId, session);
     }
 
+    @UseGuards(SessionAuthGuard, RolesGuard)
+    @Role([ROLES.STAFF, ROLES.SUPER_ADMIN])
+    @Get("/unverified-accounts")
+    async GetAllUsers(@Param() params: Record<string, any>){
+        return this.userService.getAllUnVerifiedAccounts(params);
+    }
 
     @UseGuards(SessionAuthGuard, RolesGuard)
     @Role([ROLES.ADMIN, ROLES.SUPER_ADMIN])
