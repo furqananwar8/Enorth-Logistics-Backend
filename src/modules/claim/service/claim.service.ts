@@ -208,7 +208,11 @@ export class ClaimService {
     const { search, page, limit, orderBy } = buildQuery(params, allowedFields);
 
     // 4) Base filter scoped to company
-    const filter: any = { company: ctx.company };
+    const filter: any = { };
+
+    if (ctx.user.role.name !==  ROLES.SUPER_ADMIN && !ctx.user.role.name !==  ROLES.STAFF) {
+        filter.company = ctx.company;
+    }
 
     // 5) --- Date range filter ---
     if (params.fromDate || params.toDate) {
