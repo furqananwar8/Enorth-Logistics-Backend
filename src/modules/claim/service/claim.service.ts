@@ -115,7 +115,12 @@ export class ClaimService {
  async create(dto: CreateClaimDto, session: SessionData) {
     const ctx = await this.requestContextService.resolve({ session, em: this.em });
 
+    if (!ctx?.user?.accountIsVerified) {
+        throw new ForbiddenException("Only approved account can create quote, get your account approved by admin first")
+    }
+
     const shipment = await this.em.findOne(Shipment, { id: dto.shipmentId }, { populate: ['company'] });
+    
     if (!shipment) {
       throw new BadRequestException('Invalid shipment id or you do not have required permissions');
     }
@@ -129,6 +134,7 @@ export class ClaimService {
     }
 
     const existing = await this.em.findOne(Claim, { shipment: shipment.id });
+    
     if (existing) {
       throw new BadRequestException('A claim already exists for this shipment.');
     }
@@ -386,44 +392,72 @@ export class ClaimService {
     };
   }
 
-  async deleteDocument(documentId: number) {
-    //1) Fetch document and populate claim for ownership check
-    const document = await this.em.findOne(
-      ClaimDocument,
-      { id: documentId },
-      { populate: ['claim', 'claim.submittedBy'] },
-    );
+  async deleteDocument(documentId: string, session: SessionData) { 
+     const ctx = await this.requestContextService.resolve({ session, em: this.em });
 
-    if (!document) {
-      throw new NotFoundException('Document not found');
+    if (!ctx?.user?.accountIsVerified) {
+        throw new ForbiddenException("Only approved account can create quote, get your account approved by admin first")
     }
 
-    //2). unlink from disk (do not await)
-    const filename = document.fileUrl.split('/').pop();
-    if (filename) {
-    const filePath = join(process.cwd(), 'uploads', 'claims', filename);
-    
-    //3) Just await it — single file unlink is ~1-5ms on local disk
+    const isDbId = /^\d+$/.test(documentId);
+    console.log({isDbId})
+    if (isDbId) {
+      const id = parseInt(documentId, 10);
+
+      const document = await this.em.findOne(
+        ClaimDocument,
+        { id },
+        { populate: ['claim', 'claim.submittedBy'] },
+      );
+
+      if (!document) {
+        throw new NotFoundException('Document not found');
+      }
+
+      const rawFilename = document.fileUrl.split('/').pop();
+      if (rawFilename) {
+        const filePath = join(process.cwd(), 'uploads', 'claims', rawFilename);
+
+        try {
+          await fs.unlink(filePath);
+        } catch (err: any) {
+          if (err.code !== 'ENOENT') {
+            throw new BadRequestException('Failed to delete claim document. Try again later');
+          }
+          // ENOENT is ignored: file already gone, but we still remove the DB row
+        }
+      }
+
+      this.em.remove(document);
+      await this.em.flush();
+
+      return { message: 'Successfully removed document' };
+    }
+
+    if (documentId.includes('..') || /[\\/]/.test(documentId)) {
+      throw new BadRequestException('Invalid filename');
+    }
+
+    const filePath = join(process.cwd(), 'uploads', 'claims', documentId);
+
     try {
       await fs.unlink(filePath);
     } catch (err: any) {
-      if (err.code !== 'ENOENT') {
-        throw new BadRequestException('Failed to delete claim document. Try again later')
+      if (err.code === 'ENOENT') {
+        throw new NotFoundException('File not found on server');
       }
+      throw new BadRequestException('Failed to delete file. Try again later');
     }
-  }
-    // 4. Delete the DB record and flush
-    this.em.remove(document);
-    await this.em.flush();
 
-    //5) Return back success response
-    return {
-      message: "Successfully removed document"
-    }
+    return { message: 'Successfully removed file from server' };
   }
 
   async update(claimId: number, dto: UpdateClaimDTO, session: SessionData) {
     const ctx = await this.requestContextService.resolve({ session, em: this.em });
+
+    if (!ctx?.user?.accountIsVerified) {
+        throw new ForbiddenException("Only approved account can create quote, get your account approved by admin first")
+    }
 
     const claim = await this.em.findOne(
       Claim,

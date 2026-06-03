@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   ParseIntPipe,
@@ -27,11 +28,13 @@ import { claimDocsMulterConfig } from 'src/config/multer.config';
 import { UpdateClaimStatusDto } from '../dto/update-claim-status.dto';
 import { UploadClaimDocumentDTO } from '../dto/upload-claim.dto';
 import { UpdateClaimDTO } from '../dto/update-clain.dto';
+import { EntityManager } from '@mikro-orm/postgresql';
+import { User } from 'src/entities/user.entity';
 
 
 @Controller('claims')
 export class ClaimController {
-  constructor(private readonly claimsService: ClaimService) {}
+  constructor(private readonly claimsService: ClaimService, private readonly em: EntityManager) {}
 
     @UseGuards(SessionAuthGuard, RolesGuard)
     @Role([ROLES.ADMIN, ROLES.USER])
@@ -51,9 +54,15 @@ export class ClaimController {
     @Role([ROLES.ADMIN, ROLES.USER])
     @Post('upload-documents')
     @UseInterceptors(FileInterceptor('file', claimDocsMulterConfig))
-    uploadClaimDocuments(@UploadedFile() file: Express.Multer.File,  @Body() body: UploadClaimDocumentDTO,) {
+    async uploadClaimDocuments(@UploadedFile() file: Express.Multer.File,  @Body() body: UploadClaimDocumentDTO, @Session() session: SessionData) {
         if (!file) throw new BadRequestException('File missing, please attach file in request');
 
+        const user = await this.em.findOne(User, { id: session.userId })
+        
+        if (user?.accountIsVerified) {
+            throw new ForbiddenException("Only approved account can create quote, get your account approved by admin first")
+        }
+        
         return {
             message: 'File uploaded successfully',
             document: [{
@@ -69,12 +78,12 @@ export class ClaimController {
     @UseGuards(SessionAuthGuard, RolesGuard)
     @Role([ROLES.ADMIN, ROLES.USER])
     @Delete('documents/:documentId')
-    async deleteDocument(@Param('documentId') documentId: number) {
-        return  this.claimsService.deleteDocument(documentId);
+    async deleteDocument(@Param('documentId') documentId: string, @Session() session: SessionData) {
+        return  this.claimsService.deleteDocument(documentId, session);
     }
 
     @UseGuards(SessionAuthGuard)
-    @Get()
+    @Get('/')
     async findAll(@Session() session: SessionData, @Query() params: any) {
         return this.claimsService.findAll(session, params);
     }
