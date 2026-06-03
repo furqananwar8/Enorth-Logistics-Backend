@@ -51,6 +51,9 @@ export class User{
     @Property()
     emailIsVerified!: boolean;
 
+    @Property({ default: false })
+    accountIsVerified?: boolean;
+
     @Property({ nullable: true })
     resetPasswordToken?: string;
 
@@ -107,4 +110,10 @@ export class User{
 
     @OneToMany(() => Claim, (claim) => claim.statusUpdatedBy, { nullable: true })
     statusUpdatedClaims? = new Collection<Claim>(this);
+    
+    @ManyToOne(() => User, { nullable: true })
+    accountApprovedBy?: User | null;
+
+    @OneToMany(() => User, user => user.accountApprovedBy)
+    approvedUsers? = new Collection<User>(this);
 }

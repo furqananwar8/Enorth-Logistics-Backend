@@ -54,7 +54,7 @@ export class AuthService{
         try {
             const userEntity = await this.em.transactional(async (em) => {
                 // 3) Create address
-                const addressEntity = em.create(Address, { ...address });
+                const addressEntity = em.create(Address, { ...address as Address });
 
                 // 4) Create company
                 const companyEntity = em.create(Company, { ...company, address: addressEntity });

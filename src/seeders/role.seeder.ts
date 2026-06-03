@@ -59,6 +59,7 @@ export async function seedRoles(
               termsAndConditionAccepted: true,
               companyPolicyAccepted:     true,
               isMasterAccount:           false,
+              accountIsVerified: true
             });
 
             const permissions = SUPER_ADMIN_ALLOWED_PERMISSIONS

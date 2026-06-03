@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Req, Session, UploadedFile, UseGuards, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Req, Session, UploadedFile, UseGuards, UseInterceptors } from "@nestjs/common";
 import { UserService } from "../service/user.service";
 import { CurrentUser } from "src/decorators/currentUser.decorator";
 import { SessionAuthGuard } from "src/guards/sessionAuth.guard";
@@ -14,6 +14,7 @@ import { UpdatePasswordDTO } from "../dto/update-password.dto";
 import type { SessionData } from "express-session";
 import { UpdateSettingsDto } from "../dto/user-settings-update.dto";
 import { UpdateProfileByAdminDTO } from "../dto/update-profile-by-admin.dto";
+import { AccountReviewDto } from "../dto/account-review.dto";
 
 @Controller("users")
 export class UserController {
@@ -28,6 +29,18 @@ export class UserController {
             message: "Profile details fetched successfully",
             user
         }
+    }
+
+    
+    @UseGuards(SessionAuthGuard, RolesGuard)
+    @Role([ROLES.STAFF, ROLES.SUPER_ADMIN])
+    @Patch(':id/account-review')
+    async accountReview(
+        @Param('id') id: number,
+        @Body() dto: AccountReviewDto,
+        @Session() session: SessionData,
+    ) {
+        return this.userService.reviewAccount(id, dto.action, session);
     }
 
     @UseGuards(SessionAuthGuard, RolesGuard)

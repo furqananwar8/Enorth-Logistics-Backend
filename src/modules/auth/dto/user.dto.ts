@@ -20,10 +20,8 @@ export class UserDTO {
     })
     phoneNumber!: string;
 
-    @IsNotEmpty()
+    @IsOptional()
     @IsString()
-    @MinLength(2)
-    @MaxLength(12)
     username!: string;
 
     @IsOptional()

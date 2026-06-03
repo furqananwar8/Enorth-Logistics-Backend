@@ -3,30 +3,30 @@ import { IsNotEmpty, IsOptional, IsString } from "class-validator";
 export class AddressDTO {
     @IsNotEmpty()
     @IsString()
-    address1: string;
+    address1?: string;
 
     @IsOptional()
     @IsString()
-    address2: string;
+    address2?: string;
     
-    @IsNotEmpty()
+    @IsOptional()
     @IsString()
-    unit: string;
+    unit?: string;
 
     @IsNotEmpty()
     @IsString()
-    postalCode: string;
+    postalCode?: string;
 
     @IsNotEmpty()
     @IsString()
-    country: string;
+    country?: string;
 
     @IsNotEmpty()
     @IsString()
-    city: string;
+    city?: string;
 
     @IsNotEmpty()
     @IsString()
-    state: string;
+    state?: string;
 
 }

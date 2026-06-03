@@ -19,6 +19,7 @@ import { ROLES } from "src/common/constants/roles";
 import { ENV } from "src/common/constants/env";
 import { getEnv } from "src/utils/getEnv";
 import { ADMIN_EXCLUDED_PERMISSIONS, STAFF_ALLOWED_PERMISSIONS } from "src/common/constants/permissions";
+import { AccountReviewAction } from "src/common/constants/user";
 
 @Injectable()
 export class UserService {
@@ -26,6 +27,31 @@ export class UserService {
         private readonly em: EntityManager, 
         private readonly emailService: EmailService
     ) {}
+
+    async reviewAccount(userId: number, action: AccountReviewAction, session: SessionData) {
+        const user = await this.em.findOne(User, userId);
+
+        if (!user) {
+            throw new NotFoundException('User not found');
+        }
+
+        if (action === AccountReviewAction.APPROVE && user.accountIsVerified) {
+            throw new BadRequestException('Profile already verified');
+        }
+
+        user.accountIsVerified = false;
+        user.accountApprovedBy = null;
+
+        if (action === AccountReviewAction.APPROVE) {
+            user.accountIsVerified = true;
+            user.accountApprovedBy = this.em.getReference(User, session.userId as number);
+        }
+
+        this.em.persist(user)
+        await this.em.flush();
+
+        return { message: 'Account review successfull'};
+    }
 
     async getProfile(userId: number, session: SessionData): Promise<any> {
         //1) Get the user based on userId
@@ -85,7 +111,14 @@ export class UserService {
                 throw new NotFoundException("Company not found");
             }
 
-            //4) Validate & resolve permissions
+            //4) Validate user account is verified to create sub user
+            const userDoc = await em.findOne(User, { id: session.userId});
+
+            if (!userDoc?.accountIsVerified) {
+                throw new ForbiddenException("Only approved account can create sub user, get your account approved by admin first")
+            }
+
+            //5) Validate & resolve permissions
             let permissions: Permission[] = [];
 
             if (role.name === ROLES.ADMIN) {
@@ -123,11 +156,11 @@ export class UserService {
                 }
             }
 
-            //5) Hash password
+            //6) Hash password
             const dummyPassword = getEnv(ENV.CREATE_PROFILE_PASSWORD);
             const passwordHash = await bcrypt.hash(dummyPassword, 10);
             
-            //6) Create user
+            //7) Create user
             const user = em.create(User, {
                 ...userData,
                 password: passwordHash,
@@ -136,6 +169,7 @@ export class UserService {
                 termsAndConditionAccepted: true,
                 companyPolicyAccepted: true,
                 freightBroker: false,
+                accountIsVerified: true,
                 emailIsVerified: true,
                 settings: {
                     "default_landing_page": "dashboard", 
@@ -145,15 +179,15 @@ export class UserService {
                 }
             });
 
-            //7) Assign permissions
+            //8) Assign permissions
             if (permissions.length) {
                 user.permissions.set(permissions);
             }
 
-            //8) Persist user
+            //9) Persist user
             await em.persist(user).flush();
 
-            //9) Send out account creation email to user
+            //10) Send out account creation email to user
             this.emailService.sendProfileCreatedByAdminEmail({
                 to: userData.email,
                 subject: "Your Account Has Been Created – Login Details",
@@ -167,7 +201,7 @@ export class UserService {
                 }
             });
 
-            //10) Return user
+            //11) Return user
             return;
         });
     }

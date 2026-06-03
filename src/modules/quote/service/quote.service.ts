@@ -78,6 +78,10 @@ export class QuoteService {
         //1) Resolve currently logged in user and his company details
         const ctx = await this.requestContextService.resolve({ session, em: this.em })
 
+        if (!ctx?.user?.accountIsVerified) {
+            throw new ForbiddenException("Only approved account can create quote, get your account approved by admin first")
+        }
+
         //2) Generate factory function based on quote type
         const quoteFactory: any = dto.quoteType === QuoteType.STANDARD ? new StandardQuoteFactory() : new SpotQuoteFactory();
         
