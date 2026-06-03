@@ -9,6 +9,7 @@ import { Reminder } from "./reminder.entity";
 import { Invoice } from "./invoice.entity";
 import { Shipment } from "./shipment.entity";
 import { Claim } from "./claim.entity";
+import { ClaimComment } from "./claim-comment.entity";
 
 @Entity()
 export class User{
@@ -116,4 +117,7 @@ export class User{
 
     @OneToMany(() => User, user => user.accountApprovedBy)
     approvedUsers? = new Collection<User>(this);
+
+    @OneToMany(() => ClaimComment, comment => comment.addedBy, { nullable: true })
+    claimComments? = new Collection<ClaimComment>(this);
 }

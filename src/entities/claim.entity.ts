@@ -7,6 +7,7 @@ import { User } from "./user.entity";
 import { Company } from "./company.entity";
 import { randomBytes } from "crypto";
 import { Optional } from "@nestjs/common";
+import { ClaimComment } from "./claim-comment.entity";
 
 @Entity()
 export class Claim {
@@ -63,11 +64,12 @@ export class Claim {
   @Property({ type: 'text', nullable: true, default: null })
   additionalNotes?: string | null = null;
 
-  // --- Documents ---
   @OneToMany(() => ClaimDocument, claimDocument=> claimDocument.claim, { cascade: [Cascade.ALL], orphanRemoval: true})
   documents = new Collection<ClaimDocument>(this);
 
-  // --- Timestamps ---
+  @OneToMany(() => ClaimComment, comment => comment.claim, { nullable: true })
+  comments? = new Collection<ClaimComment>(this);  
+
   @Property({ nullable: true })
   submittedAt?: Date;
 

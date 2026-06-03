@@ -30,6 +30,7 @@ import { UploadClaimDocumentDTO } from '../dto/upload-claim.dto';
 import { UpdateClaimDTO } from '../dto/update-clain.dto';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { User } from 'src/entities/user.entity';
+import { CreateClaimCommentDto } from 'src/modules/claim/dto/create-claim-comment.dto';
 
 
 @Controller('claims')
@@ -59,7 +60,7 @@ export class ClaimController {
 
         const user = await this.em.findOne(User, { id: session.userId })
         
-        if (user?.accountIsVerified) {
+        if (!user?.accountIsVerified) {
             throw new ForbiddenException("Only approved account can create quote, get your account approved by admin first")
         }
         
@@ -87,11 +88,23 @@ export class ClaimController {
     async findAll(@Session() session: SessionData, @Query() params: any) {
         return this.claimsService.findAll(session, params);
     }
+    
+    @UseGuards(SessionAuthGuard)
+    @Post(':id/comments')
+    async addComment(@Param('id') claimId: number, @Body() dto: CreateClaimCommentDto, @Session() session: SessionData) {
+        return this.claimsService.addComment(claimId, dto, session);
+    }
+
+    @UseGuards(SessionAuthGuard)
+    @Get(':id/comments')
+    async getComments(@Param('id') claimId: number, @Session() session: SessionData) {
+        return this.claimsService.getComments(claimId, session);
+    }
 
     @UseGuards(SessionAuthGuard)
     @Get(':id')
     async findOne(
-        @Param('id', ParseIntPipe) id: number,
+        @Param('id') id: number,
         @Session() session: SessionData
     ) {
         return this.claimsService.findOne(id, session);

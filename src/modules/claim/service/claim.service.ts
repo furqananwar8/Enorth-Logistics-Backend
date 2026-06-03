@@ -24,6 +24,8 @@ import fs from 'fs/promises';
 import { UpdateClaimDTO } from '../dto/update-clain.dto';
 import { Queue } from 'bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
+import { ClaimComment } from 'src/entities/claim-comment.entity';
+import { CreateClaimCommentDto } from 'src/modules/claim/dto/create-claim-comment.dto';
 
 
 @Injectable()
@@ -116,7 +118,7 @@ export class ClaimService {
     const ctx = await this.requestContextService.resolve({ session, em: this.em });
 
     if (!ctx?.user?.accountIsVerified) {
-        throw new ForbiddenException("Only approved account can create quote, get your account approved by admin first")
+        throw new ForbiddenException("Only approved account can create claim, get your account approved by admin first")
     }
 
     const shipment = await this.em.findOne(Shipment, { id: dto.shipmentId }, { populate: ['company'] });
@@ -396,11 +398,11 @@ export class ClaimService {
      const ctx = await this.requestContextService.resolve({ session, em: this.em });
 
     if (!ctx?.user?.accountIsVerified) {
-        throw new ForbiddenException("Only approved account can create quote, get your account approved by admin first")
+        throw new ForbiddenException("Only approved account can delete document, get your account approved by admin first")
     }
 
     const isDbId = /^\d+$/.test(documentId);
-    console.log({isDbId})
+  
     if (isDbId) {
       const id = parseInt(documentId, 10);
 
@@ -453,25 +455,36 @@ export class ClaimService {
   }
 
   async update(claimId: number, dto: UpdateClaimDTO, session: SessionData) {
+    // 1) Get context from session
     const ctx = await this.requestContextService.resolve({ session, em: this.em });
 
+    // 2) Only approve accounts can update claim
     if (!ctx?.user?.accountIsVerified) {
-        throw new ForbiddenException("Only approved account can create quote, get your account approved by admin first")
+        throw new ForbiddenException("Only approved account can update claim, get your account approved by admin first")
     }
 
+    // 3) Setup filter
+    const filter: any = {
+      id: claimId
+    }
+
+    // 4) Only approve accounts can 
+    if (ctx.user.role.name !==  ROLES.SUPER_ADMIN && !ctx.user.role.name !==  ROLES.STAFF) {
+        filter.company = ctx.company;
+    }
+
+    // 5) Find claim
     const claim = await this.em.findOne(
       Claim,
-      { id: claimId },
+      filter,
       { populate: ['documents', 'company'] },
     );
 
-    if (!claim) throw new NotFoundException('Claim not found');
+    // 6) Throw error for invalid claim
+    if (!claim) throw new NotFoundException("Claim not found or you don't have the permission to update this claim");
 
-    if (claim.company.id !== ctx?.company?.id) {
-      throw new ForbiddenException('You do not have permission to update this claim.');
-    }
 
-    // Early return if nothing to update
+    // 7) Define fileds that can be updated
     const scalarFields = [
       'contactFullName',
       'contactPhoneNumber',
@@ -495,31 +508,31 @@ export class ClaimService {
       return { message: 'Claim updated successfully', claim };
     }
 
-    // --- Update scalar fields ---
+    // 8) Update scalar fields
     for (const field of scalarFields) {
       if (dto[field] !== undefined) {
         (claim as any)[field] = dto[field];
       }
     }
 
-    // --- Handle additionalNotes ---
+    // 9) Handle additionalNotes
     if (dto.claimType !== undefined && dto.claimType !== ClaimType.MISSING) {
       claim.additionalNotes = null;
     } else if (dto.additionalNotes !== undefined) {
       claim.additionalNotes = dto.additionalNotes;
     }
 
-    // --- Diff documents (if provided) ---
+    // 10) Diff documents (if provided)
     if (dto.documents !== undefined) {
       const existingDocs = claim.documents.getItems();
       const newDocUrls = new Set(dto.documents.map((d) => d.fileUrl));
       const existingUrls = new Set(existingDocs.map((d) => d.fileUrl));
 
-      // 1. Documents to remove: exist in DB but not in new DTO
+      // 11) Documents to remove: exist in DB but not in new DTO
       const docsToRemove = existingDocs.filter((doc) => !newDocUrls.has(doc.fileUrl));
 
       for (const doc of docsToRemove) {
-        // Queue disk deletion for 10 minutes later
+        // 12) Queue disk deletion for 10 minutes later
         const filename = doc.fileUrl.split('/').pop();
         if (filename) {
           const filePath = join(process.cwd(), 'uploads', 'claims', filename);
@@ -530,11 +543,11 @@ export class ClaimService {
           );
         }
 
-        // Remove from collection immediately (cascade handles DB)
+        // 13) Remove from collection immediately (cascade handles DB)
         claim.documents.remove(doc);
       }
 
-      // 2. Documents to add: exist in DTO but not in DB
+      // 14) Documents to add: exist in DTO but not in DB
       const docsToAdd = dto.documents.filter((docDto) => !existingUrls.has(docDto.fileUrl));
 
       if (docsToAdd.length) {
@@ -554,8 +567,94 @@ export class ClaimService {
       }
     }
 
+    // 15) Persist changes
     await this.em.flush();
 
-    return { message: 'Claim updated successfully', claim };
+    // 16) Return back success response
+    return { message: 'Claim updated successfully'};
   }
+
+  async addComment(claimId: number, dto: CreateClaimCommentDto, session: SessionData) {
+    // 1) Get user from context
+    const ctx = await this.requestContextService.resolve({ session, em: this.em });
+
+    // 2) Only approve accounts can add comment
+    if (ctx.user.role.name !==  ROLES.SUPER_ADMIN && !ctx?.user?.accountIsVerified) {
+        throw new ForbiddenException("Only approved account can add comment, get your account approved by admin first")
+    }
+
+    // 3) Setup filter
+    const filter: any = {
+      id: claimId
+    }
+
+    // 4) Only approve accounts can 
+    if (ctx.user.role.name !==  ROLES.SUPER_ADMIN && !ctx.user.role.name !==  ROLES.STAFF) {
+        filter.company = ctx.company;
+    }
+
+    // 5) Get the claim
+    const claim = await this.em.findOne(Claim, filter);
+    
+    // 6) Throw exception for invalid claim
+    if (!claim) {
+      throw new NotFoundException('Claim not found');
+    }
+
+    // 7) Add comment
+    const comment = this.em.create(ClaimComment, {
+      message: dto.message,
+      addedBy: ctx.user,
+      claim,
+    });
+
+    // 8) Persist it to database
+    this.em.persist(comment);
+    await this.em.flush();
+
+    // 9) Return back success response
+    return {
+      message: 'Comment added successfully'
+    };
+  }
+
+async getComments(claimId: number, session: SessionData) {
+  // 1) Get context from session
+  const ctx = await this.requestContextService.resolve({ session, em: this.em });
+  
+  // 2) Find claim
+  const claim = await this.em.findOne(Claim, claimId);
+  
+  // 3) Throw exception for invalid claim
+  if (!claim) {
+    throw new NotFoundException('Claim not found');
+  }
+
+  // 4) Setup filter
+  const filter: any = {
+    claim: claimId
+  }
+
+
+  // 5) Only approve accounts can 
+  if (ctx.user.role.name !==  ROLES.SUPER_ADMIN && !ctx.user.role.name !==  ROLES.STAFF) {
+      filter.company = ctx.company;
+  }
+
+  // 6) Get all the comments for this calim
+  const comments = await this.em.find(
+    ClaimComment,
+    filter,
+    {
+      populate: ['addedBy'],
+      orderBy: { createdAt: 'DESC' },
+    },
+  );
+
+  // 7) Return back success response
+  return {
+    message: 'Comments retrieved successfully',
+    comments,
+  };
+}
 }

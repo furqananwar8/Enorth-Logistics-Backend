@@ -32,7 +32,7 @@ export class RequestContextService {
     const user = await em.findOne(
       User,
       { id: userId },
-      { populate: ['company','company.savedCards'], refresh: true}
+      { populate: ['company','company.savedCards', 'role'], refresh: true}
     );
 
     if (!user) {
