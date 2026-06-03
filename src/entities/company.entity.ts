@@ -21,6 +21,12 @@ export class Company{
     @Property({ nullable: true})
     industryType?: string;
 
+    @Property({ nullable: true, default: 0 })
+    ltlRateToBeChargedPerShipment?: number;
+
+    @Property({ nullable: true, default: 0 })
+    ftlRateToBeChargedPerShipment?: number;
+
     @OneToOne(() => Address)
     address!: Address;
 
