@@ -731,7 +731,7 @@ export class QuoteService {
         const quote = await this.em.findOne(Quote, filter,{
             populate: ["createdBy","createdBy.firstName", "createdBy.lastName","addresses", "addresses.locationType", "addresses.addressBookEntry", "addresses.addressBookEntry.address", "addresses.address","lineItems", "lineItems.units",
                         "palletServices", "spotFtlServices", "spotLtlServices", "standardFTLService", 
-                        "signature", "insurance","spotDetails", "spotDetails.spotContact", "spotDetails.spotEquipment","shipment", "shipment.trackingEvents", "shipment.surcharges"]
+                        "signature", "insurance","spotDetails", "spotDetails.spotContact", "spotDetails.spotEquipment","shipment", "shipment.trackingEvents", "shipment.surcharges", "shipment.bookedBy"]
         });
         //2) Throw error for invalid quote
         if(!quote){

@@ -10,7 +10,6 @@ export class TrackingController {
                 private readonly trackingService: TrackingService
     ) {}
 
-
     @UseGuards(SessionAuthGuard)
     @Get("/")
     async GetAllTrackingsAgainstCurrentUserCompany(@Query() queryParams: any, @Session() session: SessionData) {
