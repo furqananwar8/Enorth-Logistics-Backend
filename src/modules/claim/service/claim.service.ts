@@ -286,7 +286,8 @@ export class ClaimService {
           'documents',
           'documents.uploadedBy',
           'submittedBy',
-          'statusUpdatedBy'
+          'statusUpdatedBy',
+          'comments'
         ],
       },
     );
