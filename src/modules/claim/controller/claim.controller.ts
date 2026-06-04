@@ -27,7 +27,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { claimDocsMulterConfig } from 'src/config/multer.config';
 import { UpdateClaimStatusDto } from '../dto/update-claim-status.dto';
 import { UploadClaimDocumentDTO } from '../dto/upload-claim.dto';
-import { UpdateClaimDTO } from '../dto/update-clain.dto';
+import { UpdateClaimDTO } from '../dto/update-claim.dto';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { User } from 'src/entities/user.entity';
 import { CreateClaimCommentDto } from 'src/modules/claim/dto/create-claim-comment.dto';

@@ -21,7 +21,7 @@ import { allowedTransitions } from 'src/common/constants/claim';
 import { UpdateClaimStatusDto } from '../dto/update-claim-status.dto';
 import { join } from 'path';
 import fs from 'fs/promises';
-import { UpdateClaimDTO } from '../dto/update-clain.dto';
+import { UpdateClaimDTO } from '../dto/update-claim.dto';
 import { Queue } from 'bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
 import { ClaimComment } from 'src/entities/claim-comment.entity';
