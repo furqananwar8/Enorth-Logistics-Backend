@@ -68,6 +68,7 @@ export class ClaimService {
           bolNumber: claim.shipment.bolNumber,
           totalNetCharge: claim.shipment.totalNetCharge,
           totalBaseCharge: claim.shipment.totalBaseCharge,
+          serviceName: claim.shipment.serviceName,
           surcharges: claim.shipment.surcharges,
           currency: claim.shipment.currency,
           bookedBy: claim.shipment.bookedBy
@@ -97,6 +98,7 @@ export class ClaimService {
       id: doc.id,
       fileName: doc.fileName,
       fileUrl: doc.fileUrl,
+      documentType: doc.documentType,
       uploadedBy: doc.uploadedBy
         ? {
             firstName: doc.uploadedBy.firstName,
