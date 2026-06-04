@@ -68,7 +68,7 @@ export class Claim {
   documents = new Collection<ClaimDocument>(this);
 
   @OneToMany(() => ClaimComment, comment => comment.claim, { nullable: true })
-  comments? = new Collection<ClaimComment>(this);  
+  comments = new Collection<ClaimComment>(this);  
 
   @Property({ nullable: true })
   submittedAt?: Date;

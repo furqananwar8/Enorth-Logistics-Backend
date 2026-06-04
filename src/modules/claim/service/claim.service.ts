@@ -56,7 +56,7 @@ export class ClaimService {
     updatedAt: claim.updatedAt,
     statusUpdatedAt: claim.statusUpdatedAt,
     statusUpdatedBy: `${claim.statusUpdatedBy?.firstName} ${claim.statusUpdatedBy?.lastName}`,
-
+    comments: claim.comments.map(comment => ({ message: comment?.message, addedBy: { fristName: comment?.addedBy?.firstName, lastName: comment?.addedBy?.lastName}})),
     // --- Shipment (with hidden quote override) ---
     shipment: claim.shipment
       ? {
@@ -321,7 +321,9 @@ export class ClaimService {
           'documents',
           'documents.uploadedBy',
           'submittedBy',
-          'statusUpdatedBy'
+          'statusUpdatedBy',
+          'comments',
+          'comments.addedBy'
         ] 
       },
     );
@@ -624,43 +626,37 @@ export class ClaimService {
     };
   }
 
-async getComments(claimId: number, session: SessionData) {
-  // 1) Get context from session
-  const ctx = await this.requestContextService.resolve({ session, em: this.em });
-  
-  // 2) Find claim
-  const claim = await this.em.findOne(Claim, claimId);
-  
-  // 3) Throw exception for invalid claim
-  if (!claim) {
-    throw new NotFoundException('Claim not found');
+  async getComments(claimId: number, session: SessionData) {
+    const ctx = await this.requestContextService.resolve({ session, em: this.em });
+
+    // 1) Build claim filter with conditional company ownership
+    const claimFilter: any = { id: claimId };
+
+    if (ctx.user.role.name !== ROLES.SUPER_ADMIN && ctx.user.role.name !== ROLES.STAFF) {
+      claimFilter.company = ctx?.company?.id;  // or ctx.company for entity reference
+    }
+
+    // 2) Verify claim exists (and belongs to user's company if non-privileged)
+    const claim = await this.em.findOne(Claim, claimFilter);
+
+    if (!claim) {
+      throw new NotFoundException('Claim not found');
+    }
+
+    // 3) Fetch comments through the claim relation
+    const comments = await this.em.find(
+      ClaimComment,
+      { claim: claimId },
+      {
+        populate: ['addedBy'],
+        fields: ['message', 'addedBy.firstName', 'addedBy.lastName'],
+        orderBy: { createdAt: 'DESC' },
+      },
+    );
+
+    return {
+      message: 'Comments retrieved successfully',
+      comments,
+    };
   }
-
-  // 4) Setup filter
-  const filter: any = {
-    claim: claimId
-  }
-
-
-  // 5) Only approve accounts can 
-  if (ctx.user.role.name !==  ROLES.SUPER_ADMIN && !ctx.user.role.name !==  ROLES.STAFF) {
-      filter.company = ctx.company;
-  }
-
-  // 6) Get all the comments for this calim
-  const comments = await this.em.find(
-    ClaimComment,
-    filter,
-    {
-      populate: ['addedBy'],
-      orderBy: { createdAt: 'DESC' },
-    },
-  );
-
-  // 7) Return back success response
-  return {
-    message: 'Comments retrieved successfully',
-    comments,
-  };
-}
 }

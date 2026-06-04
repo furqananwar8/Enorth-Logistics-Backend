@@ -13,7 +13,7 @@ export class ClaimComment {
   @ManyToOne(() => User)
   addedBy!: User;
 
-  @ManyToOne(() => Claim)
+  @ManyToOne(() => Claim, { hidden: true })
   claim!: Claim;
 
   @Property({ nullable: true, onCreate: () => new Date() })
