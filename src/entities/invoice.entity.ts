@@ -26,7 +26,7 @@ export class Invoice {
   
   @BeforeCreate()
   generateInvoiceNumber() {
-    this.invoiceNumber = `ULS${randomBytes(4).toString('hex').toUpperCase()}`;
+    this.invoiceNumber = `ENOR${randomBytes(4).toString('hex').toUpperCase()}`;
   }
 
   @Property({ onCreate: () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) })

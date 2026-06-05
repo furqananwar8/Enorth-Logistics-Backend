@@ -23,7 +23,7 @@ const isDev = process.env.NODE_ENV !== "production";
         debug: isDev,
       },
       defaults: {
-        from: "noreply<uls-freight.com>"
+        from: "noreply<enorthlogistics.com>"
       },
       template: {
         dir: path.join(__dirname, '../templates'),
