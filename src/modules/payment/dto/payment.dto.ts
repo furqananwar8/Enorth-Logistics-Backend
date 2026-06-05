@@ -26,5 +26,5 @@ export class SaveCardDto {
   @IsString()
   @IsNotEmpty()
   @Length(3, 50, { message: 'Invalid payment method ID' })
-  paymentMethodId!: string;
+  nonce!: string;
 }

@@ -77,7 +77,7 @@ export class User{
     isMasterAccount?: Boolean;
 
     @Property({ nullable: true })
-    stripeCustomerId?: string;
+    squareCustomerId?: string;
 
     @ManyToOne(() => Company, { nullable: true })
     company?: Company;

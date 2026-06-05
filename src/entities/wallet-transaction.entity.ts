@@ -31,7 +31,7 @@ export class WalletTransaction {
   balanceAfter?: number = 0;
 
   @Property({ nullable: true })
-  stripePaymentIntentId?: string;
+  squarePaymentId?: string;
 
   @Property({ nullable: true })
   stripeChargeId?: string;

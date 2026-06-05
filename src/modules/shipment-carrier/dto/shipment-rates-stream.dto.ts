@@ -144,26 +144,30 @@ class PackageDTO {
   weightUnit!: WeightUnit;
 
   @IsNumber()
-  @Min(0.1)
+  @IsOptional()
   weight!: number;
 
   @IsEnum(DimensionsUnit)
   dimensionsUnit!: DimensionsUnit;
 
+  @IsOptional()
   @IsNumber()
-  @Min(1)
-  length!: number;
 
-  @IsNumber()
-  @Min(1)
-  width!: number;
+  length?: number;
 
+  @IsOptional()
   @IsNumber()
-  @Min(1)
-  height!: number;
 
+  width?: number;
+
+  @IsOptional()
   @IsNumber()
-  @Min(1)
+
+  height?: number;
+
+  @IsOptional()
+  @IsNumber()
+
   handlingUnits!: number;
 
   @IsEnum(Packaging)

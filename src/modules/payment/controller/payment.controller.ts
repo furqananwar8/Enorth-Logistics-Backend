@@ -14,7 +14,6 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import type { SessionData } from 'express-session';
 import { CreateSetupIntentDto, SaveCardDto, ChargeCardDto } from '../dto/payment.dto';
 
-
 @Controller('payments')
 @UseGuards(SessionAuthGuard)
 export class PaymentController {
@@ -25,10 +24,10 @@ export class PaymentController {
 
   @Post('setup-intent')
   async createSetupIntent(@Body() dto: CreateSetupIntentDto) {
-    const setupIntent = await this.paymentService.createSetupIntent(dto.customerId);
+    const config = await this.paymentService.createSetupIntent(dto.customerId);
     return {
-      clientSecret: setupIntent.client_secret,
-      setupIntentId: setupIntent.id,
+      applicationId: config.applicationId,
+      locationId: config.locationId,
     };
   }
 
@@ -42,16 +41,16 @@ export class PaymentController {
     const cards = await this.paymentService.listCards(session);
     return cards.map((card) => ({
       id: card.id,
-      brand: card.card?.brand,
-      last4: card.card?.last4,
-      expMonth: card.card?.exp_month,
-      expYear: card.card?.exp_year,
+      brand: card.cardBrand,
+      last4: card.last4,
+      expMonth: card.expMonth,
+      expYear: card.expYear,
     }));
   }
 
   @Post('cards')
   async saveCard(@Body() dto: SaveCardDto, @Session() session: SessionData) {
-    return this.paymentService.saveCard(session, dto.paymentMethodId);
+    return this.paymentService.saveCard(session, dto.nonce);
   }
 
   @Get('saved-cards')
@@ -61,14 +60,7 @@ export class PaymentController {
 
   @Get('wallet')
   async getWallet(@Session() session: SessionData) {
-    const ctx = await this.paymentService['requestContextService'].resolve({ session, em: this.em });
-    const wallet = await this.em.findOne('Wallet' as any, { user: ctx.user }) as any;
-    if (!wallet) return { balance: 0, totalDeposited: 0 };
-    return {
-      balance: wallet.balance,
-      totalDeposited: wallet.totalDeposited,
-      updatedAt: wallet.updatedAt,
-    };
+    return this.paymentService.getWallet(session);
   }
 
   @Post('charge')
@@ -78,14 +70,27 @@ export class PaymentController {
   ) {
     return this.paymentService.chargeSavedCard(session, {
       cardId: dto.cardId,
-      amountCents: dto.amount,
+      amount: dto.amount,
       currency: dto.currency,
     });
   }
 
-  @Delete('cards/:paymentMethodId')
-  async removeCard(@Param('paymentMethodId') paymentMethodId: string) {
-    await this.paymentService.detachCard(paymentMethodId);
+  @Delete('cards/:cardId')
+  async removeCard(@Param('cardId') cardId: string) {
+    await this.paymentService.detachCard(cardId);
     return { message: 'Card removed successfully' };
+  }
+
+  @Get('payments/:paymentId')
+  async getPayment(@Param('paymentId') paymentId: string) {
+    const { payment } = await this.paymentService['square'].payments.get({ paymentId });
+    return {
+      id: payment?.id,
+      status: payment?.status,
+      amount: Number(payment?.amountMoney?.amount),
+      currency: payment?.amountMoney?.currency,
+      createdAt: payment?.createdAt,
+      locationId: payment?.locationId,
+    };
   }
 }

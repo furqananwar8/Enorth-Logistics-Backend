@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, InternalServerErrorException, UnauthorizedException } from "@nestjs/common";
 import { SignupDTO } from "../dto/signup.dto";
 import { EntityManager } from "@mikro-orm/postgresql";
 import { User } from "src/entities/user.entity";
@@ -16,40 +16,51 @@ import { OtpService } from "src/modules/otp/service/otp.service";
 import { ForgotPasswordDTO } from "../dto/forgot-password.dto";
 import { ResetPasswordDTO } from "../dto/reset-password.dto";
 import { Wallet } from "src/entities/wallet.entity";
-import { Stripe } from "node_modules/stripe/cjs/stripe.core";
 import { ENV } from "src/common/constants/env";
 import { getEnv } from "src/utils/getEnv";
+import { SquareClient, SquareEnvironment } from "square";
+import { randomUUID } from "crypto";
 
 @Injectable()
 export class AuthService{
-    private stripe: any;
-    
+    private square: any;
     constructor(
         private readonly em: EntityManager,
         private readonly otpService: OtpService
     ){
-        const secretKey = getEnv(ENV.STRIPE_SECRET_KEY);
-            this.stripe = new Stripe(secretKey, {
-                apiVersion: '2026-04-22.dahlia',
-            });
+        const accessToken = getEnv(ENV.SQUARE_ACCESS_TOKEN);
+        const envString = (getEnv(ENV.SQUARE_ENVIRONMENT) || 'sandbox').toLowerCase();
+
+        this.square = new SquareClient({
+            token: accessToken,
+            environment: envString === 'production' 
+                ? SquareEnvironment.Production 
+                : SquareEnvironment.Sandbox,
+        });
     }
 
-        async signup(dto: SignupDTO) {
+    // ── Updated signup method ───────────────────────────────────────
+    async signup(dto: SignupDTO) {
         const { user, company, address, shippingPreference } = dto;
 
-        // 1) Fast fail BEFORE starting transaction or Stripe
+        // 1) Fast fail BEFORE starting transaction or Square
         const existingUser = await this.em.findOne(User, { email: user.email });
         if (existingUser) {
             throw new ConflictException("User already exists with this email address");
         }
 
-        // 2) Start Stripe in parallel immediately (all data comes from DTO)
-        const stripePromise = this.stripe.customers.create({
-            email: user.email,
-            name: `${user.firstName} ${user.lastName}`.trim(),
+        // 2) Start Square customer creation in parallel (all data comes from DTO)
+        const squarePromise = this.square.customers.create({
+            idempotencyKey: randomUUID(),
+            emailAddress: user.email,
+            givenName: user.firstName,
+            familyName: user.lastName,
+        }).then(res => res.customer).catch((err) => {
+            console.error('Square customer.create error:', err);
+            return null;
         });
 
-        let stripeCustomer: any = null;
+        let squareCustomer: any = null;
 
         try {
             const userEntity = await this.em.transactional(async (em) => {
@@ -123,11 +134,15 @@ export class AuthService{
                 return userEntity;
             });
 
-            // 10) Stripe already ran in parallel — just await the result
-            stripeCustomer = await stripePromise;
+            // 10) Square already ran in parallel — just unwrap the result
+            squareCustomer = await squarePromise;
 
-            // 11) Save stripeCustomerId
-            userEntity.stripeCustomerId = stripeCustomer.id;
+            if (!squareCustomer) {
+                throw new InternalServerErrorException('Failed to create Square customer');
+            }
+
+            // 11) Save squareCustomerId
+            userEntity.squareCustomerId = squareCustomer.id;
             await this.em.persist(userEntity).flush();
 
             // 12) Send OTP (fire and forget)
@@ -139,17 +154,16 @@ export class AuthService{
             return userEntity;
 
         } catch (error) {
-            // Cleanup: if DB failed but Stripe succeeded, delete orphan Stripe customer
-            if (!stripeCustomer) {
-                stripeCustomer = await stripePromise.catch(() => null);
+            // Cleanup: if DB failed but Square succeeded, delete orphan Square customer
+            if (!squareCustomer) {
+                squareCustomer = await squarePromise;
             }
-            if (stripeCustomer) {
-                await this.stripe.customers.del(stripeCustomer.id).catch(() => {});
+            if (squareCustomer) {
+                await this.square.customers.delete({ customerId: squareCustomer.id }).catch(() => {});
             }
             throw error;
         }
     }
-
     async signin(dto: SigninDTO) {
         //1) Extract email and password
         const { email, password } = dto;

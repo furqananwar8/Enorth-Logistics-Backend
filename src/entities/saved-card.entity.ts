@@ -11,11 +11,7 @@ export class SavedCard {
   company!: Company;
 
   @Property()
-  @Index()
-  stripePaymentMethodId?: string;
-
-  @Property()
-  stripeCustomerId?: string;
+  squareCardId?: string;
 
   @Property()
   brand?: string;
