@@ -170,8 +170,9 @@ class PackageDTO {
 
   handlingUnits!: number;
 
+  @IsOptional()
   @IsEnum(Packaging)
-  packaging!: Packaging;
+  packaging?: Packaging;
 }
 
 // ─── Main DTO ──────────────────────────────────────
@@ -211,4 +212,7 @@ export class ShipmentRatesStreamDTO {
   @Type(() => PackageDTO)
   @ArrayMinSize(1)
   packages!: PackageDTO[];
+
+  @IsBoolean()
+  stackable?: boolean;
 }

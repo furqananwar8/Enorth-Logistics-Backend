@@ -1,6 +1,6 @@
 import { EntityManager } from "@mikro-orm/postgresql";
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import { FedExAdapter } from "../adapter/fedex.adapter";
+import { FedExAdapter, ShipmentType } from "../adapter/fedex.adapter";
 import { TSTCFExpressAdapter } from "../adapter/tst-cf-express.adapter";
 import { TForceAdapter } from "../adapter/tforce.adapter";
 import { Observable, catchError, from, map, merge, of } from "rxjs";
@@ -62,10 +62,14 @@ export class ShipmentCarrierService {
             throw new BadRequestException("Convert quote into shipment to proceed further")
         }
 
-        if(quote?.shipment?.carrier){
+        if(quote?.shipment?.carrier && quote.shipment.carrier !== null){
             throw new BadRequestException("Shipment already processed, create a new one")
         }
         
+        if (dto.carrier === Carrier.TFORCE && [ShipmentType.COURIER, ShipmentType.PACKAGE].includes(quote.shipmentType as any)) {
+            throw new BadRequestException("TFORCE support only pallet & FTL shipment type for shipment creation")
+        }
+
         const selectedRateCharge = Number(dto.selectedRate.totalCharge);
         
         const walletBalance = await this.paymentService.getWalletBalance(session);
@@ -137,14 +141,38 @@ export class ShipmentCarrierService {
         // ✅ TForce
         if (dto.carrier === Carrier.TFORCE) {
             carrierResponse = await this.tforceAdapter.createShipment(dto, quote);
+
             const detail = carrierResponse?.raw?.detail ?? {};
             const rateDetail = carrierResponse?.rateDetail?.[0];
-
+    
             // Rate breakdown using TForce rate codes from docs:
             // LND_GROSS = gross base charge before discount
             // DSCNT     = discount amount
             // FUEL_SUR  = fuel surcharge
             // shipmentCharges.total = final total
+
+            const summary = carrierResponse?.raw?.summary;
+            const statusCode = summary?.responseStatus?.code;
+            const statusMessage = summary?.responseStatus?.message;
+
+            // ── Handle non-success TForce codes ─────────────────────────────────────
+            if (statusCode && statusCode !== '200') {
+                // BOL may have been created, but rate is missing or requires manual action
+                if (detail?.bolId) {
+                // BOL exists but is unrateable — do NOT save as a normal shipment
+                throw new BadRequestException(
+                    `TForce shipment created (BOL ${detail.bolId}, PRO ${detail.pro}) ` +
+                    `but requires manual rating: ${statusMessage}. ` +
+                    `Please contact TForce Customer Service at 800-333-7400 to resolve.`
+                );
+                }
+
+                // Complete failure
+                throw new BadRequestException(
+                `TForce shipment failed: ${statusMessage} (Code ${statusCode})`
+                );
+            }
+
             const rates: Array<{ code: string; value: string }> = rateDetail?.rate ?? [];
             const findRate = (code: string) =>
                 Number(rates.find((r) => r.code === code)?.value || 0);
@@ -322,12 +350,17 @@ export class ShipmentCarrierService {
     }
 
     private async getTForceRates(dto: any) {
+        if([ShipmentType.COURIER, ShipmentType.PACKAGE].includes(dto.shipmentType)) {
+            return null;
+        }
+        
         const tforceDto = {
             ...dto,
-            type: 'PALLET',
+            type: dto.shipmentType,
             from: dto.tforce?.from,
             to: dto.tforce?.to,
-            pallets: dto.pallets || [],
+            stackable: dto.stackable,
+            pallets: dto.packages || dto.pallets || [],
             dangerousGoods: dto.dangerousGoods || false,
         };
 

@@ -54,10 +54,11 @@ export interface PalletLineItem {
   nmfc?: string;
   nmfcSub?: string;
   stackable?: boolean;
-  unitsOnPallet: number;
+  unitsOnPallet?: number;
   palletUnitType: string;
   description?: string;
   dangerousGoods?: boolean;
+  handlingUnits?: number;
 }
 
 export interface PackageLineItem {
@@ -78,6 +79,8 @@ export interface ShipmentRateRequest {
   from: Address;
   to: Address;
   shipDate?: Date;
+  stackable?: boolean;
+
   rateRequestType: string;
   dangerousGoods: boolean;
   pallets?: PalletLineItem[];
@@ -135,7 +138,7 @@ interface TForceRateResponse {
 
 interface CarrierPayloadMapper {
   supports(type: ShipmentType): boolean;
-  map(request: ShipmentRateRequest, accountNumber: string): unknown;
+  map(request: ShipmentRateRequest, accountNumber: string, isVolume: boolean): unknown;
 }
 
 // ============================================================================
@@ -166,25 +169,19 @@ function mapWeightUnit(unit?: string): string {
     return map[unit?.toUpperCase() || ''] || 'inches';
   }
 
-  function mapPackagingType(type?: string): string {
-  const map: Record<string, string> = {
-    // LineItemUnitType enum → TForce packaging code
-    PALLET: 'PLT',
-    DRUM: 'DRM',
-    BOXES: 'BOX',
-    ROLLS: 'ROL',
-    PIPES_OR_TUBES: 'TBE',
-    BALES: 'BAL',
-    BAGS: 'BAG',
-    CYLINDER: 'CYL',
-    PAILS: 'PAIL',
-    REELS: 'REEL',
-    CRATE: 'CRT',
-    LOOSE: 'LOOSE',
-    PIECES: 'PCS',
-  };
-  return map[type?.toUpperCase() || ''] || 'PLT';
-}
+  function mapPackagingType(shipmentType:  string, stackable: boolean = false): string {
+    if (shipmentType === ShipmentType.PALLET) {
+      return 'PLT';
+    }
+
+    // FTL shipments
+    if (stackable) {
+      return 'SKD';
+    }
+
+    return 'LSE';    // Loose / non-stackable
+  }
+
 class TForceLTLMapper implements CarrierPayloadMapper {
   
   supports(type: ShipmentType): boolean {
@@ -195,108 +192,101 @@ class TForceLTLMapper implements CarrierPayloadMapper {
     );
   }
 
-  map(req: ShipmentRateRequest, accountNumber: string): unknown {
-    const units = req.packages ?? req.pallets ?? [];
-    const pickupDate = req.shipDate ? new Date(req.shipDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+  map(req: ShipmentRateRequest, accountNumber: string, isVolume: boolean = false): unknown {
+    const pickupDate = req.shipDate
+      ? new Date(req.shipDate).toISOString().split('T')[0]
+      : new Date().toISOString().split('T')[0];
 
-    const commodities = units?.map((unit: any) => {
-      const commodity: Record<string, unknown> = {
-        class: unit.freightClass ?? '50',      // nullish coalescing
-        pieces: unit.unitsOnPallet ?? unit.handlingUnits ?? 1,
-        weight: {
-          weight: unit.weight,
-          weightUnit: mapWeightUnit(unit.dimensionsUnit),
-        },
-        packagingType: mapPackagingType(unit.palletUnitType),
-        dangerousGoods: unit.dangerousGoods ?? req.dangerousGoods ?? false,
-      };
-
-      if (unit.nmfc) {
-        commodity.nmfc = {
-          prime: unit.nmfc,
-          ...(unit.nmfcSub ? { sub: unit.nmfcSub } : {}),
+      // ── Standard LTL path (PACKAGE + PALLET) ─────────────────────────────────
+      const units = req.packages ?? req.pallets ?? [];
+  
+      const commodities = units.map((unit: any) => {
+        const commodity: Record<string, unknown> = {
+          class: unit.freightClass ?? '50',
+          pieces: unit.unitsOnPallet ?? unit.handlingUnits ?? 1,
+          weight: {
+            weight: unit.weight,
+            // FIXED: was passing dimensionsUnit into weight unit mapper
+            weightUnit: mapWeightUnit(unit.weightUnit ?? 'LB'),
+          },
+          packagingType: mapPackagingType(req.type, req.stackable),
+          dangerousGoods: unit.dangerousGoods ?? req.dangerousGoods ?? false,
         };
-      }
-
-      if (unit.length && unit.width && unit.height) {
-        commodity.dimensions = {
-          length: unit.length,
-          width: unit.width,
-          height: unit.height,
-          unit: mapDimensionUnit(unit.dimensionsUnit),
-        };
-      }
-
-      return commodity;
-    });
-
-    return {
-      requestOptions: {
-        serviceCode: '308', // Standard TForce LTL service
-        pickupDate,
-        type: 'L',
-        densityEligible: false,
-        timeInTransit: true,
-        quoteNumber: true,
-      },
-      shipFrom: {
-        address: {
-          city: req.from.city,
-          stateProvinceCode: req.from.stateOrProvinceCode || req.from.state,
-          postalCode: req.from.postalCode,
-          country: req.from.countryCode,
+  
+        if (unit.nmfc) {
+          commodity.nmfc = {
+            prime: unit.nmfc,
+            ...(unit.nmfcSub ? { sub: unit.nmfcSub } : {}),
+          };
+        }
+  
+        // Only add dimensions if all three are present
+        if (unit.length && unit.width && unit.height) {
+          commodity.dimensions = {
+            length: unit.length,
+            width: unit.width,
+            height: unit.height,
+            unit: mapDimensionUnit(unit.dimensionsUnit ?? 'IN'),
+          };
+        }
+  
+        return commodity;
+      });
+      
+      return {
+        requestOptions: {
+          serviceCode: '308',
+          pickupDate,
+          type: 'L',
+          densityEligible: false,
+          timeInTransit: true,
+          quoteNumber: true,
         },
-        isResidential: req.from?.isResidential || false,
-      },
-      shipTo: {
-        address: {
-          city: req.to.city,
-          stateProvinceCode: req.to.stateOrProvinceCode || req.to.state,
-          postalCode: req.to.postalCode,
-          country: req.to.countryCode,
-        },
-        isResidential: req.to?.isResidential || false,
-      },
-      payment: {
-        payer: {
+        shipFrom: {
           address: {
             city: req.from.city,
             stateProvinceCode: req.from.stateOrProvinceCode || req.from.state,
             postalCode: req.from.postalCode,
             country: req.from.countryCode,
           },
+          isResidential: req.from?.isResidential ?? false,
         },
-        billingCode: '10', // Prepaid (shipper pays)
-      },
-      serviceOptions: {
-        pickup: [
-          // ...(req.services?.insidePickup ? ['INPU'] : []),
-          // ...(req.services?.liftgatePickup ? ['LIFO'] : []),
-          // ...(req.services?.limitedAccess ? ['LAPU'] : []),
-          // ...(req.services?.residentialPickup ? ['RESP'] : []),
-          // ...(req.services?.tradeShowDelivery ? ['TRPU'] : []),
-        ],
-        delivery: [
-          // ...(req.services?.insideDelivery ? ['INDE'] : []),
-          // ...(req.services?.liftgateDelivery ? ['LIFO'] : []),
-          // ...(req.services?.limitedAccess ? ['LADE'] : []),
-          // ...(req.services?.residentialDelivery ? ['RESD'] : []),
-        ],
-        shipment: {
-          ...(req.services?.protectFromFreeze ? { freezableProtection: true } : {}),
-          ...(req.services?.excessValue ? { excessValue: { value: String(req.services.excessValue), currency: 'USD' } } : {}),
-  
-        }
-        
-        // {
-        //   ...(req.services?.protectFromFreeze ? { freezableProtection: true } : {}),
-        //   // ...(req.services?.excessValue ? { excessValue: { value: String(req.services.excessValue), currency: 'USD' } } : {}),
-        //   // ...(req.services?.extremeLength ? { extremeLength: { value: String(req.services.extremeLength), unit: 'FEET' } } : {}),
-        // },
-      },
-      commodities,
-    };
-  }
+        shipTo: {
+          address: {
+            city: req.to.city,
+            stateProvinceCode: req.to.stateOrProvinceCode || req.to.state,
+            postalCode: req.to.postalCode,
+            country: req.to.countryCode,
+          },
+          isResidential: req.to?.isResidential ?? false,
+        },
+        payment: {
+          payer: {
+            address: {
+              city: req.from.city,
+              stateProvinceCode: req.from.stateOrProvinceCode || req.from.state,
+              postalCode: req.from.postalCode,
+              country: req.from.countryCode,
+            },
+          },
+          billingCode: '10',
+        },
+        serviceOptions: {
+          pickup: [],
+          delivery: [],
+          shipment: {
+            ...(req.services?.protectFromFreeze ? { freezableProtection: true } : {}),
+            ...(req.services?.excessValue ? {
+              excessValue: {
+                value: String(req.services.excessValue),
+                currency: 'USD',
+              },
+            } : {}),
+          },
+        },
+        commodities,
+      };
+    }
 }
 
 // ============================================================================
@@ -304,6 +294,7 @@ class TForceLTLMapper implements CarrierPayloadMapper {
 // ============================================================================
 
 class TForceVolumeMapper implements CarrierPayloadMapper {
+  
   supports(type: ShipmentType): boolean {
     return type === ShipmentType.STANDARD_FTL;
   }
@@ -318,11 +309,12 @@ class TForceVolumeMapper implements CarrierPayloadMapper {
       0,
     );
     const totalPieces = (req.pallets || []).reduce(
-      (sum, p) => sum + p.unitsOnPallet,
+      (sum, p) => sum + (p.handlingUnits as number),
       0,
     );
 
     const units = req.packages ?? req.pallets ?? [];
+
     return {
       requestOptions: {
         serviceCode: '308',
@@ -354,7 +346,7 @@ class TForceVolumeMapper implements CarrierPayloadMapper {
         delivery: [],
         shipment: {},
       },
-      commodity: [
+      commodity: 
         {
           linearfeet: this.estimateLinearFeet(units as any),
           pieces: totalPieces,
@@ -362,16 +354,52 @@ class TForceVolumeMapper implements CarrierPayloadMapper {
             weight: totalWeight,
             weightUnit: 'LBS',
           },
-          packagingType: 'PLT',
+          packagingType: mapPackagingType(req.type, req.stackable),
           dangerousGoods: req.dangerousGoods ?? false,
-        },
-      ],
+        }
     };
   }
 
   private estimateLinearFeet(pallets: PalletLineItem[]): number {
-    // Standard pallet is 48" deep = 4 linear feet
-    return pallets.reduce((sum, p) => sum + p.unitsOnPallet * 4, 0);
+    if (!pallets || pallets.length === 0) {
+      throw new BadRequestException('At least one pallet line item is required.');
+    }
+
+    // Sum total handling units across ALL line items
+    const totalPalletCount = pallets.reduce((sum, p) => sum + (p.handlingUnits ?? 1), 0);
+
+    if (totalPalletCount === 0) {
+      throw new BadRequestException('Total handling units cannot be zero.');
+    }
+
+    // Use the first item's dimensions as the uniform pallet footprint
+    // For FTL, length/width should be the pallet size (e.g., 48x40), not box size
+    const unit = pallets[0];
+    const palletLength = unit.length ?? 48;   // inches
+    const palletWidth  = unit.width  ?? 40;   // inches
+    const trailerWidth = 96;                  // standard dry van width in inches
+
+    // Orientation A: palletWidth across trailer, palletLength along trailer
+    const perRowA = Math.floor(trailerWidth / palletWidth);
+    const rowsA   = Math.ceil(totalPalletCount / Math.max(perRowA, 1));
+    const feetA   = rowsA * (palletLength / 12);
+
+    // Orientation B: palletLength across trailer, palletWidth along trailer
+    const perRowB = Math.floor(trailerWidth / palletLength);
+    const rowsB   = Math.ceil(totalPalletCount / Math.max(perRowB, 1));
+    const feetB   = rowsB * (palletWidth / 12);
+
+    const linearFeet = Math.ceil(Math.min(feetA, feetB));
+
+    // Guardrail: TForce volume rating requires 8–28 ft
+    if (linearFeet < 8) {
+      throw new BadRequestException(
+        `Estimated linear feet (${linearFeet}) is below TForce minimum of 8. ` +
+        `This shipment should use PALLET type (standard LTL /getRate) instead of FTL.`
+      );
+    }
+
+    return linearFeet;
   }
 }
 
@@ -468,12 +496,12 @@ export class TForceAdapter implements CarrierAdapter {
     }
 
     const isVolume = req.type === ShipmentType.STANDARD_FTL;
-    const endpoint = isVolume
-      ? `${this.baseUrl}/volumeRating?api-version=${this.apiVersion}`
-      : `${this.baseUrl}/getRate?api-version=${this.apiVersion}`;
+    const endpoint = isVolume ? `${this.baseUrl}/volumeRating?api-version=${this.apiVersion}` : `${this.baseUrl}/getRate?api-version=${this.apiVersion}`;
 
-    // Wrap endpoint + payload together so fetchRates can stay signature-compatible
-    return { __tforceEndpoint: endpoint, payload: mapper.map(req, this.accountNumber) };
+    return {
+      __tforceEndpoint: endpoint,
+      payload: mapper.map(req, this.accountNumber, isVolume),
+    };
   }
 
   // --------------------------------------------------------------------------
@@ -485,7 +513,7 @@ export class TForceAdapter implements CarrierAdapter {
       __tforceEndpoint: string;
       payload: unknown;
     };
-
+  
     const token = await this.getAuthToken();
 
     const response = await fetch(endpoint, {
@@ -569,16 +597,11 @@ export class TForceAdapter implements CarrierAdapter {
   private toTForceHandlingUnitTypeCode(shipmentType: ShipmentType): string {
     switch (shipmentType) {
       case ShipmentType.PALLET:      return 'PLT';
-      case ShipmentType.PACKAGE:     return 'SKD';
 
       case ShipmentType.STANDARD_FTL:
         // TForce supports FTL *rating* via volumeRating endpoint
         // but has no API for FTL BOL creation — must go through TForce customer service
         throw new Error(`TForce does not support BOL creation for FTL shipments via API`);
-
-      case ShipmentType.COURIER_PAK:
-        // TForce is an LTL/FTL freight carrier — courier paks are parcel level, wrong carrier
-        throw new Error(`TForce does not support COURIER_PAK shipments`);
 
       default:
         return 'SKD';
@@ -698,17 +721,17 @@ export class TForceAdapter implements CarrierAdapter {
 
     // TForce is LTL — map each unit to a commodity entry.
     // Use handlingUnitOne (grouped pieces) for the pallet/skid count.
-    const totalPieces = units.reduce((sum: number, u: any) => sum + (u.quantity || 1), 0);
+    const totalPieces = units.reduce((sum: number, u: any) => sum + (u.unitsOnPallet || 1), 0);
 
     const commodities = units.map((unit: any, i: number) => ({
       description:   unit.description || `Commodity ${i + 1}`,
-      class:         this.normalizeFreightClass(unit.freightClass),  // ✅ Fix #3
-      pieces:        unit.quantity || 1,
+      class:         this.normalizeFreightClass(unit.freightClass),
+      pieces:        unit.unitsOnPallet || 1,
       weight: {
         weight:     unit.weight,
         weightUnit: (unit.weightUnit || 'LBS').toUpperCase() === 'KG' ? 'KGS' : 'LBS',
       },
-      packagingType:  this.toTForceCommodityPackagingType(unit.unitType as LineItemUnitType),
+      packagingType:   mapPackagingType(quote.shipmentType, quote.lineItems?.stackable),
       dangerousGoods: quote?.lineItem?.dangerousGoods ? true : false,
       ...(unit.length && unit.width && unit.height ? {
         dimensions: { length: unit.length, width: unit.width, height: unit.height, unit: 'IN' },
@@ -746,7 +769,7 @@ export class TForceAdapter implements CarrierAdapter {
         address: {
           addressLine:       origin?.address1  || '',
           city:              origin?.city      || '',
-          stateProvinceCode: this.toTForceStateCode(origin?.state),  // ✅ Fix #2
+          stateProvinceCode: this.toTForceStateCode(origin?.state),
           postalCode:        this.normalizePostalCode(origin?.postalCode) || '',
           country:           origin?.country || origin?.countryCode || 'US',
         },
@@ -759,7 +782,7 @@ export class TForceAdapter implements CarrierAdapter {
         address: {
           addressLine:       dest?.address1  || '',
           city:              dest?.city      || '',
-          stateProvinceCode: this.toTForceStateCode(dest?.state),    // ✅ Fix #2
+          stateProvinceCode: this.toTForceStateCode(dest?.state),
           postalCode:        this.normalizePostalCode(dest?.postalCode) || '',
           country:           dest?.country || dest?.countryCode || 'US',
         },
@@ -773,7 +796,7 @@ export class TForceAdapter implements CarrierAdapter {
           address: {
             addressLine:       origin?.address1  || '',
             city:              origin?.city      || '',
-            stateProvinceCode: this.toTForceStateCode(origin?.state), // ✅ Fix #2
+            stateProvinceCode: this.toTForceStateCode(origin?.state),
             postalCode:        this.normalizePostalCode(origin?.postalCode) || '',
             country:           origin?.country || origin?.countryCode || 'US',
           },
@@ -827,7 +850,7 @@ export class TForceAdapter implements CarrierAdapter {
         ],
       },
     };
-
+    console.dir(payload, { depth: null })
     // ── Call the Shipping API ─────────────────────────────────────────────────
     // Note: shipping uses a different base URL than rating
     const shippingBaseUrl = 'https://api.tforcefreight.com/shipping';
