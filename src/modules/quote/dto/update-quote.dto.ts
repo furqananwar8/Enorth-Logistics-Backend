@@ -196,7 +196,7 @@ export class ServicesDTO {
   // STANDARD_FTL services
   @IsOptional()
   @IsBoolean()
-  looseFreight?: boolean;
+  looseFreight?: any;
 
   @IsOptional()
   @IsBoolean()
