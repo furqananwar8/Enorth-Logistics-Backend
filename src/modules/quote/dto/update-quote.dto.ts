@@ -170,6 +170,17 @@ export class InsuranceDTO {
   currency?: Currency;
 }
 
+export class LooseFreightDTO {
+  @IsNumber()
+  totalWeight!: number;
+
+  @IsString()
+  measurementUnit!: string; // or use an enum if you have one
+
+  @IsNumber()
+  totalCount!: number;
+}
+
 // ==================== Services DTO ====================
 export class ServicesDTO {
   // PALLET services
@@ -195,8 +206,9 @@ export class ServicesDTO {
 
   // STANDARD_FTL services
   @IsOptional()
-  @IsBoolean()
-  looseFreight?: any;
+  @ValidateNested()
+  @Type(() => LooseFreightDTO)
+  looseFreight?: LooseFreightDTO;
 
   @IsOptional()
   @IsBoolean()
