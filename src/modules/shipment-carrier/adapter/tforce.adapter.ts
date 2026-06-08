@@ -169,18 +169,20 @@ function mapWeightUnit(unit?: string): string {
     return map[unit?.toUpperCase() || ''] || 'inches';
   }
 
-  function mapPackagingType(shipmentType:  string, stackable: boolean = false): string {
-    if (shipmentType === ShipmentType.PALLET) {
+  function mapPackagingType(shipmentType: ShipmentType, stackable?: boolean): string {
+  switch (shipmentType) {
+    case ShipmentType.PALLET:
+      return 'PLT';  // Pallet
+    case ShipmentType.PACKAGE:
+      return stackable ? 'PLT' : 'BOX';  // or 'CTN'
+    case ShipmentType.COURIER_PAK:
+      return 'BOX';  // or 'ENV' for envelope
+    case ShipmentType.STANDARD_FTL:
+      return 'PLT';  // FTL is always pallet/skid based
+    default:
       return 'PLT';
-    }
-
-    // FTL shipments
-    if (stackable) {
-      return 'SKD';
-    }
-
-    return 'LSE';    // Loose / non-stackable
   }
+}
 
 class TForceLTLMapper implements CarrierPayloadMapper {
   
@@ -300,6 +302,8 @@ class TForceVolumeMapper implements CarrierPayloadMapper {
   }
 
   map(req: ShipmentRateRequest, _accountNumber: string): unknown {
+    console.log("INSIDE SHIPMENT CARRIER")
+    console.log({req})
     const pickupDate = req.shipDate
       ? new Date(req.shipDate).toISOString().split('T')[0]
       : new Date().toISOString().split('T')[0];

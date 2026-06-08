@@ -1,4 +1,6 @@
+import { BadRequestException } from "@nestjs/common";
 import { AddressType } from "src/common/enum/address-type.enum";
+import { ShipmentType } from "src/common/enum/shipment-type.enum";
 import { Quote } from "src/entities/quote.entity";
 import { TSTCFRateRequest, TSTCFAddress, TSTCFShipLine, TSTCFAccessorials } from "src/types/tst-cf-express";
 
@@ -107,6 +109,8 @@ private formatCountry(country: string | undefined): string {
 
   map(request: any): TSTCFRateRequest {
     const shipDate = this.formatDate(request?.shipDate || new Date());
+    const rawType = (request?.shipmentType || '').toString().toUpperCase();
+    const isFTL = rawType === 'STANDARD_FTL' || rawType === 'SPOT_FTL';
 
     return {
       requestor: process.env.TST_CF_REQUESTOR || '',
@@ -120,7 +124,7 @@ private formatCountry(country: string | undefined): string {
       shipdate: shipDate,
       origin: this.mapAddress(request.tst?.from),
       destination: this.mapAddress(request.tst?.to),
-      service: this.serviceMap[request.serviceType] || 'ST',
+      service: isFTL ? 'TL' : 'ST',
       funds: 'C',
       rqby: 'S',
       terms: request?.paymentTerms || 'P',
@@ -132,9 +136,75 @@ private formatCountry(country: string | undefined): string {
         funds: request.declaredValue?.currency || '',
       },
       shipdetail: {
-        line: request.packages.map((pkg: any, index: number) => this.mapPackage(pkg, index)),
+        line: request.packages.map((pkg: any, index: number) =>
+          isFTL ? this.mapFTLPackage(pkg, index) : this.mapPackageByType(pkg, index, request.shipmentType),
+        ),
       },
       accitems: this.mapAccessorials(request.accessorials),
+    };
+  }
+
+  private mapPackageByType(pkg: any, index: number, shipmentType: ShipmentType): any {
+    switch (shipmentType) {
+      case ShipmentType.STANDARD_FTL:
+        return this.mapFTLPackage(pkg, index);
+      case ShipmentType.COURIER_PAK:
+        return this.mapCourierPakPackage(pkg, index);
+      case ShipmentType.PALLET:
+        return this.mapPalletPackage(pkg, index);
+      case ShipmentType.PACKAGE:
+      default:
+        return this.mapStandardPackage(pkg, index);
+    }
+  }
+
+  private mapStandardPackage(pkg: any, index: number): any {
+    return this.mapPalletPackage(pkg, index);
+  }
+
+  private mapPalletPackage(pkg: any, index: number): any {
+    const len = pkg.length || pkg.dimensions?.length;
+    const wid = pkg.width || pkg.dimensions?.width;
+    const hgt = pkg.height || pkg.dimensions?.height;
+
+    if (!len || !wid || !hgt) {
+      throw new BadRequestException(
+        `Package ${index + 1}: PALLET/PACKAGE requires length, width, and height.`,
+      );
+    }
+
+    return {
+      seq: index + 1,
+      weight: pkg.weight,
+      class: pkg.freightClass || pkg.class || '050',
+      nmfc: pkg.nmfc || '',
+      stackable: pkg.stackable ? 'Y' : 'N',
+      cubicft: pkg.cubicFeet || '',
+      dimensions: {
+        qty: pkg.handlingUnits || pkg.quantity || 1,
+        len,
+        wid,
+        hgt,
+      },
+    };
+  }
+
+  private mapCourierPakPackage(pkg: any, index: number): any {
+    return {
+      seq: index + 1,
+      weight: pkg.weight,
+      pieces: pkg.handlingUnits || 1,
+      description: pkg.description || 'Courier Pak',
+    };
+  }
+
+  private mapFTLPackage(pkg: any, index: number): any {
+    return {
+      seq: index + 1,
+      weight: pkg.weight,
+      pieces: pkg.handlingUnits || 1,
+      description: pkg.description || 'FTL Freight',
+      class: '050',
     };
   }
 

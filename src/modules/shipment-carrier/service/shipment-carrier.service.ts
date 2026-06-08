@@ -345,6 +345,14 @@ export class ShipmentCarrierService {
     }
 
     private async getTSTRates(tstDto: any) {
+        const shipmentType = tstDto?.shipmentType as ShipmentType;
+        const isFTL = shipmentType === ShipmentType.STANDARD_FTL;
+
+        if (isFTL) {
+            throw new BadRequestException(`Unsupported shipmentType: ${shipmentType}`);
+           
+        }
+
         const tstAdapter = new TSTCFExpressAdapter();
         return tstAdapter.getRates(tstDto);
     }
@@ -359,7 +367,7 @@ export class ShipmentCarrierService {
             type: dto.shipmentType,
             from: dto.tforce?.from,
             to: dto.tforce?.to,
-            stackable: dto.stackable,
+            stackable: dto.stackable || false,
             pallets: dto.packages || dto.pallets || [],
             dangerousGoods: dto.dangerousGoods || false,
         };

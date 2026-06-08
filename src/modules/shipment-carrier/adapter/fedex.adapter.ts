@@ -315,7 +315,7 @@ export class FedExAdapter implements CarrierAdapter {
     const isLTL = this.LTL_TYPES.has(type);
 
      if (isLTL && this.accountNumber === getEnv(ENV.FEDEX_US_ACCOUNT_NUMBER)) {
-        console.warn('FedEx Freight skipped: account 740561073 is not freight-enabled');
+        console.warn('FedEx Freight rate request skipped: no freight account configured');
         return { output: { rateReplyDetails: [] } };
     }
     const payload = isLTL ? this.buildFreightRequest(req) : this.buildParcelRequest(req);
