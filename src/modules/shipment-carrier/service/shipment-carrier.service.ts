@@ -49,7 +49,8 @@ export class ShipmentCarrierService {
                 "addresses.addressBookEntry",
                 "addresses.addressBookEntry.address",
                 "addresses.addressBookEntry.phoneNumber",
-                "addresses.addressBookEntry.contactName"
+                "addresses.addressBookEntry.contactName",
+                "standardFTLService"
             ] as any,
             }
         ) as Quote;

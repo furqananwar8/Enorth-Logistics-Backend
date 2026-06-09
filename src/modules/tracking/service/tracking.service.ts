@@ -25,8 +25,21 @@ export class TrackingService {
 
         const { search, page, limit, orderBy } = buildQuery(params, allowedFields);
 
+        const startOfDay = (dateStr: string): Date => {
+            const d = new Date(dateStr);
+            d.setHours(0, 0, 0, 0);
+            return d;
+        };
+        
+        const endOfDay = (dateStr: string): Date => {
+            const d = new Date(dateStr);
+            d.setHours(23, 59, 59, 999);
+            return d;
+        };
+
         let filter: Record<string, any> = {};
 
+        
         if (session.role !== ROLES.SUPER_ADMIN) {
             filter["company"] = this.em.getReference(Company, session.companyId as number);
         }
@@ -47,18 +60,12 @@ export class TrackingService {
         if (search) {
             filter["$or"] = [
                 { shipment: { trackingNumber: { $ilike: `%${search}%` } } },
-                {
-                    addresses: {
-                        $some: {
-                            address: {
-                                $or: [
-                                    { address1: { $ilike: `%${search}%` } },
-                                    { address2: { $ilike: `%${search}%` } },
-                                ],
-                            },
-                        },
-                    },
-                },
+
+                { addresses: { $some: { addressBookEntry: { address: { address1: { $ilike: `%${search}%` } } } } } },
+                { addresses: { $some: { addressBookEntry: { address: { address2: { $ilike: `%${search}%` } } } } } },
+                { addresses: { $some: { address: { address1: { $ilike: `%${search}%` } } } } },
+                { addresses: { $some: { address: { address2: { $ilike: `%${search}%` } } } } },
+
                 {
                     shipment: {
                         billingReferences: {
@@ -73,8 +80,8 @@ export class TrackingService {
 
         if (params.dateFrom || params.dateTo) {
             filter["createdAt"] = {
-                ...(params.dateFrom && { $gte: new Date(params.dateFrom) }),
-                ...(params.dateTo   && { $lte: new Date(params.dateTo) }),
+                ...(params.dateFrom && { $gte: startOfDay(params.dateFrom) }),
+                ...(params.dateTo   && { $lte: endOfDay(params.dateTo) }),
             };
         }
 
@@ -82,25 +89,38 @@ export class TrackingService {
             filter["shipment"] = { ...filter["shipment"], carrier: params.carrier };
         }
 
+
         if (params.shipDateFrom || params.shipDateTo) {
             filter["shipment"] = {
                 ...filter["shipment"],
                 shipDate: {
-                    ...(params.shipDateFrom && { $gte: new Date(params.shipDateFrom) }),
-                    ...(params.shipDateTo   && { $lte: new Date(params.shipDateTo) }),
+                    ...(params.shipDateFrom && { $gte: startOfDay(params.shipDateFrom) }),
+                    ...(params.shipDateTo   && { $lte: endOfDay(params.shipDateTo) }),
                 },
             };
         }
 
         if (params.originPostalCode) {
             filter["addresses"] = {
-                $some: { type: "FROM", address: { postalCode: { $ilike: `${params.originPostalCode}%` } } },
+                $some: {
+                    type: "FROM",
+                    $or: [
+                        { addressBookEntry: { address: { postalCode: { $ilike: `${params.originPostalCode}%` } } } },
+                        { address: { postalCode: { $ilike: `${params.originPostalCode}%` } } },
+                    ],
+                },
             };
         }
 
         if (params.destinationPostalCode) {
             const dest = {
-                $some: { type: "TO", address: { postalCode: { $ilike: `${params.destinationPostalCode}%` } } },
+                $some: {
+                    type: "TO",
+                    $or: [
+                        { addressBookEntry: { address: { postalCode: { $ilike: `${params.destinationPostalCode}%` } } } },
+                        { address: { postalCode: { $ilike: `${params.destinationPostalCode}%` } } },
+                    ],
+                },
             };
             filter["addresses"] = filter["addresses"]
                 ? { $and: [filter["addresses"], dest] }
