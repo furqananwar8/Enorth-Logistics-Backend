@@ -89,58 +89,65 @@ export class UserService {
         };
     }
 
-    async createProfile(dto: CreateProfileDTO, companyId: number, session: SessionData) {
+    async createProfile(
+        dto: CreateProfileDTO,
+        companyId: number | null | undefined,
+        session: SessionData
+    ) {
         return this.em.transactional(async (em) => {
             const { roleId, permissionIds, ...userData } = dto;
 
-            //1) Validate role
+            // 1) Validate role
             const role = await em.findOne(Role, { id: roleId });
-            
             if (!role) {
                 throw new BadRequestException("Invalid role");
             }
-            
-            //2) Prevent non-superAdmin from creating a superAdmin account
+
+            // 2) Prevent non-superAdmin from creating a superAdmin account
             if (role.name === ROLES.SUPER_ADMIN && session.role !== ROLES.SUPER_ADMIN) {
                 throw new ForbiddenException("Only a superAdmin can create another superAdmin account");
             }
 
-            //3) Validate company early
-            const company = await em.findOne(Company, { id: companyId });
+            // 3) Validate company (optional for SUPER_ADMIN and STAFF)
+            const isCompanyOptional = role.name === ROLES.SUPER_ADMIN || role.name === ROLES.STAFF;
+            let company: Company | null = null;
 
-            if (!company) {
-                throw new NotFoundException("Company not found");
+            if (companyId) {
+                company = await em.findOne(Company, { id: companyId });
+                if (!company) {
+                    throw new NotFoundException("Company not found");
+                }
+            } else if (!isCompanyOptional) {
+                throw new BadRequestException("Company is required for this role");
             }
 
-            //4) Validate user account is verified to create sub user
-            const userDoc = await em.findOne(User, { id: session.userId});
-
+            // 4) Validate creator account is verified
+            const userDoc = await em.findOne(User, { id: session.userId });
             if (!userDoc?.accountIsVerified) {
-                throw new ForbiddenException("Only approved account can create sub user, get your account approved by admin first")
+                throw new ForbiddenException(
+                    "Only approved accounts can create sub-users. Get your account approved by admin first."
+                );
             }
 
-            //5) Validate & resolve permissions
+            // 5) Validate & resolve permissions
             let permissions: Permission[] = [];
 
             if (role.name === ROLES.ADMIN) {
                 permissions = await em.find(Permission, {
-                    name: { $nin: ADMIN_EXCLUDED_PERMISSIONS }
+                    name: { $nin: ADMIN_EXCLUDED_PERMISSIONS },
                 });
-
             } else if (role.name === ROLES.SUPER_ADMIN) {
                 permissions = await em.find(Permission, {
-                    name: { $in: STAFF_ALLOWED_PERMISSIONS }
+                    name: { $in: STAFF_ALLOWED_PERMISSIONS },
                 });
-
             } else {
                 if (!permissionIds?.length) {
                     throw new BadRequestException("Provide at least one permission for user role");
                 }
 
                 const uniquePermissionIds = [...new Set(permissionIds)];
-
                 const count = await em.count(Permission, {
-                    id: { $in: uniquePermissionIds }
+                    id: { $in: uniquePermissionIds },
                 });
 
                 if (count !== uniquePermissionIds.length) {
@@ -150,59 +157,59 @@ export class UserService {
                 if (role.name === ROLES.STAFF) {
                     permissions = await em.find(Permission, {
                         id:   { $in: uniquePermissionIds },
-                        name: { $in: STAFF_ALLOWED_PERMISSIONS }
+                        name: { $in: STAFF_ALLOWED_PERMISSIONS },
                     });
                 } else {
-                    permissions = uniquePermissionIds.map(id => em.getReference(Permission, id));
+                    permissions = uniquePermissionIds.map((id) => em.getReference(Permission, id));
                 }
             }
 
-            //6) Hash password
+            // 6) Hash password
             const dummyPassword = getEnv(ENV.CREATE_PROFILE_PASSWORD);
             const passwordHash = await bcrypt.hash(dummyPassword, 10);
-            
-            //7) Create user
+
+            // 7) Create user
             const user = em.create(User, {
                 ...userData,
                 password: passwordHash,
                 role,
-                company: em.getReference(Company, companyId),
+                ...(company ? { company: em.getReference(Company, company.id) } : {}),
                 termsAndConditionAccepted: true,
                 companyPolicyAccepted: true,
                 freightBroker: false,
                 accountIsVerified: true,
                 emailIsVerified: true,
                 settings: {
-                    "default_landing_page": "dashboard", 
-                    "home_quick_button": "create_order", 
-                    "language": "en", 
-                    "dark_mode": "dark"
-                }
+                    default_landing_page: "dashboard",
+                    home_quick_button: "create_order",
+                    language: "en",
+                    dark_mode: "dark",
+                },
             });
 
-            //8) Assign permissions
+            // 8) Assign permissions
             if (permissions.length) {
                 user.permissions.set(permissions);
             }
 
-            //9) Persist user
+            // 9) Persist user
             await em.persist(user).flush();
 
-            //10) Send out account creation email to user
+            // 10) Send account creation email
             this.emailService.sendProfileCreatedByAdminEmail({
                 to: userData.email,
                 subject: "Your Account Has Been Created – Login Details",
                 template: "create-profile",
                 context: {
-                    name: userData.firstName + " " + userData.lastName,
+                    name: `${userData.firstName} ${userData.lastName}`,
                     email: userData.email,
                     password: dummyPassword,
-                    companyName: company.name,
-                    loginUrl: `${process.env.FRONTEND_ORIGIN}/login`
-                }
+                    ...(company ? { companyName: company.name } : {}),
+                    loginUrl: `${process.env.FRONTEND_ORIGIN}/login`,
+                },
             });
 
-            //11) Return user
+            // 11) Return user
             return;
         });
     }
