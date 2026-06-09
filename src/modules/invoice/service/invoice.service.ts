@@ -12,6 +12,7 @@ import { GetAllInvoicesQueryParams } from '../dto/get-all-invoices.dto';
 import { InvoiceListDto } from '../dto/invoice-list.dto';
 import { RequestContextService } from 'src/utils/request-context-service';
 import { wrap } from '@mikro-orm/core';
+import { startOfDay, endOfDay } from 'src/utils/dates';
 
 @Injectable()
 export class InvoiceService {
@@ -74,7 +75,7 @@ export class InvoiceService {
     };
   }
 
-   async getAllInvoicesAgainstCurrentUserCompany(session: SessionData, queryParams: GetAllInvoicesQueryParams) {
+  async getAllInvoicesAgainstCurrentUserCompany(session: SessionData, queryParams: GetAllInvoicesQueryParams) {
     const ctx = await this.requestContextService.resolve({ session, em: this.em });
     const { page, limit } = buildQuery(queryParams as any, {});
     const offset = (page - 1) * limit;
@@ -92,12 +93,12 @@ export class InvoiceService {
       .leftJoin('s.bookedBy', 'b')
       .where({ 'i.company': ctx?.company?.id });
 
-    // Date range
+    // Date range (normalized to full days)
     if (queryParams.startDate) {
-      qb.andWhere({ 'i.createdAt': { $gte: new Date(queryParams.startDate) } });
+      qb.andWhere({ 'i.createdAt': { $gte: startOfDay(queryParams.startDate) } });
     }
     if (queryParams.endDate) {
-      qb.andWhere({ 'i.createdAt': { $lte: new Date(queryParams.endDate) } });
+      qb.andWhere({ 'i.createdAt': { $lte: endOfDay(queryParams.endDate) } });
     }
 
     // Status filters
