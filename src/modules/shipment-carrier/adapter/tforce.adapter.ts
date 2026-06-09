@@ -302,8 +302,6 @@ class TForceVolumeMapper implements CarrierPayloadMapper {
   }
 
   map(req: ShipmentRateRequest, _accountNumber: string): unknown {
-    console.log("INSIDE SHIPMENT CARRIER")
-    console.log({req})
     const pickupDate = req.shipDate
       ? new Date(req.shipDate).toISOString().split('T')[0]
       : new Date().toISOString().split('T')[0];
@@ -605,7 +603,7 @@ export class TForceAdapter implements CarrierAdapter {
       case ShipmentType.STANDARD_FTL:
         // TForce supports FTL *rating* via volumeRating endpoint
         // but has no API for FTL BOL creation — must go through TForce customer service
-        throw new Error(`TForce does not support BOL creation for FTL shipments via API`);
+        // throw new Error(`TForce does not support BOL creation for FTL shipments via API`);
 
       default:
         return 'SKD';
@@ -719,32 +717,69 @@ export class TForceAdapter implements CarrierAdapter {
     const destEmail         = destAddrBook?.email || undefined;
 
     // ── Line items / handling units ──────────────────────────────────────────
-    const lineItem = quote.lineItems;
-    const units    = lineItem?.units || [];
+    let units: any[] = [];
 
+    if (quote.shipmentType === ShipmentType.STANDARD_FTL) {
+        const ftlItem = quote.standardFTLService.looseFreight ?? quote.standardFTLService.pallets;
+        const ftlItems = ftlItem ? [ftlItem] : [];
+
+        units = ftlItems.map((item: any, idx: number) => {
+            const parsedWeight = Number(item.totalWeight);
+            const weight = Number.isFinite(parsedWeight) && parsedWeight > 0 ? parsedWeight : 0;
+
+            if (weight < 1 || weight > 19999) {
+                throw new BadRequestException(
+                    `FTL item #${idx + 1} has invalid weight (${item.totalWeight}). ` +
+                    `TForce requires commodity weight between 1 and 19,999 LBS.`
+                );
+            }
+
+            return {
+                description: item.description || 'Freight',
+                weight: weight,
+                weightUnit: 'LBS',
+                freightClass: '50',
+                unitsOnPallet: 1,
+            };
+        });
+    } else {
+      const lineItem = await quote.lineItems.loadItems();
+      units = lineItem?.units || [];
+    }
 
     // TForce is LTL — map each unit to a commodity entry.
     // Use handlingUnitOne (grouped pieces) for the pallet/skid count.
-    const totalPieces = units.reduce((sum: number, u: any) => sum + (u.unitsOnPallet || 1), 0);
+    const totalPieces = Math.max(1, units.reduce((sum, u) => sum + (u.unitsOnPallet || 1), 0));
 
-    const commodities = units.map((unit: any, i: number) => ({
-      description:   unit.description || `Commodity ${i + 1}`,
-      class:         this.normalizeFreightClass(unit.freightClass),
-      pieces:        unit.unitsOnPallet || 1,
-      weight: {
-        weight:     unit.weight,
-        weightUnit: (unit.weightUnit || 'LBS').toUpperCase() === 'KG' ? 'KGS' : 'LBS',
-      },
-      packagingType:   mapPackagingType(quote.shipmentType, quote.lineItems?.stackable),
-      dangerousGoods: quote?.lineItem?.dangerousGoods ? true : false,
-      ...(unit.length && unit.width && unit.height ? {
-        dimensions: { length: unit.length, width: unit.width, height: unit.height, unit: 'IN' },
-      } : {}),
-      ...(unit.declaredValue ? {
-        commodityValue: { value: unit.declaredValue, currency: 'USD' },
-      } : {}),
-      commodityID: i + 1,
-    }));
+    const commodities = units.map((unit: any, i: number) => {
+      // Final safety check for all shipment types
+      const w = Number(unit.weight);
+      if (!Number.isFinite(w) || w < 1 || w > 19999) {
+        throw new BadRequestException(
+          `Commodity #${i + 1} weight (${unit.weight}) is invalid. ` +
+          `TForce requires weight between 1 and 19,999 LBS.`
+        );
+      }
+
+      return {
+        description:   unit.description || `Commodity ${i + 1}`,
+        class:         this.normalizeFreightClass(unit.freightClass),
+        pieces:        unit.unitsOnPallet || 1,
+        weight: {
+          weight:     w,
+          weightUnit: (unit.weightUnit || 'LBS').toUpperCase() === 'KG' ? 'KGS' : 'LBS',
+        },
+        packagingType:   mapPackagingType(quote.shipmentType, quote.lineItems?.stackable),
+        dangerousGoods: quote?.lineItem?.dangerousGoods ? true : false,
+        ...(unit.length && unit.width && unit.height ? {
+          dimensions: { length: unit.length, width: unit.width, height: unit.height, unit: 'IN' },
+        } : {}),
+        ...(unit.declaredValue ? {
+          commodityValue: { value: unit.declaredValue, currency: 'USD' },
+        } : {}),
+        commodityID: i + 1,
+      };
+    });
 
     // ── Pickup date ───────────────────────────────────────────────────────────
     const pickupDate = req.shipDate ? new Date(req.shipDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
@@ -848,13 +883,13 @@ export class TForceAdapter implements CarrierAdapter {
             label: {
               type:             '07',  // Thermal 4x6
               startPosition:    1,
-              numberOfStickers: totalPieces,
+              numberOfStickers:  totalPieces,
             },
           },
         ],
       },
     };
-    console.dir(payload, { depth: null })
+    console.dir(payload, { depth: null });
     // ── Call the Shipping API ─────────────────────────────────────────────────
     // Note: shipping uses a different base URL than rating
     const shippingBaseUrl = 'https://api.tforcefreight.com/shipping';

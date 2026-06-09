@@ -153,7 +153,7 @@ export class QuoteService {
 
     async update(quoteId: number, rawDto: UpdateQuoteDTO, session: SessionData) {
         const isValidPayload = hasValidField(rawDto);
-        
+
         if (!isValidPayload) {
             throw new BadRequestException("Provide at least one valid field to update");
         }
@@ -194,6 +194,7 @@ export class QuoteService {
 
         //3) VALIDATE & FILTER
         const validation = validateUpdateQuote(rawDto, quote);
+
         if (!validation.valid) {
             throw new BadRequestException({
                 message: validation.errors,
@@ -880,6 +881,7 @@ export class QuoteService {
                     "name",
                     "quoteId",
                     "createdAt",
+                    "shipmentType",
 
                     // Direct address on quote address
                     "addresses.id",

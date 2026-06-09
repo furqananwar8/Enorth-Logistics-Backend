@@ -44,6 +44,7 @@ export class QuoteController{
     @UseGuards(SessionAuthGuard, PermissionsGuard)
     @Patch("/:id")
     async Update(@Param("id") quoteId: number, @Body() dto: UpdateQuoteDTO, @Session() session: SessionData){
+        console.log("Update quote")
         return this.quoteService.update(quoteId, dto, session)
     }
 
