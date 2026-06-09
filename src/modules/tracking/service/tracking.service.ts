@@ -7,6 +7,7 @@ import { Company } from "src/entities/company.entity";
 import { Quote } from "src/entities/quote.entity";
 import { PaginationParams } from "src/types/pagination";
 import { buildQuery } from "src/utils/api-query";
+import { startOfDay, endOfDay } from "src/utils/dates";
 
 @Injectable()
 export class TrackingService {
@@ -24,18 +25,6 @@ export class TrackingService {
         };
 
         const { search, page, limit, orderBy } = buildQuery(params, allowedFields);
-
-        const startOfDay = (dateStr: string): Date => {
-            const d = new Date(dateStr);
-            d.setHours(0, 0, 0, 0);
-            return d;
-        };
-        
-        const endOfDay = (dateStr: string): Date => {
-            const d = new Date(dateStr);
-            d.setHours(23, 59, 59, 999);
-            return d;
-        };
 
         let filter: Record<string, any> = {};
 

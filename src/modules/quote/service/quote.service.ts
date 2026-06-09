@@ -48,6 +48,7 @@ import { getEmailTemplate } from "src/utils/get-email-template";
 import { ShipmentTypeLabel } from "src/utils/shipment-type-label-mapping";
 import { RequestContextService } from "src/utils/request-context-service";
 import { ROLES } from "src/common/constants/roles";
+import { startOfDay, endOfDay } from "src/utils/dates";
 @Injectable()
 export class QuoteService {
     constructor(
@@ -783,7 +784,7 @@ export class QuoteService {
     async getAllAgainstCurrentUserCompany(
         session: SessionData,
         params: PaginationParams,
-        ) {
+    ) {
         // 1) Fields allowed for sorting / searching
         const allowedFields = {
             quoteNumber: "quoteNumber",
@@ -791,80 +792,82 @@ export class QuoteService {
             status: "status",
             createdAt: "createdAt",
         };
-        
+
         // 2) Derive pagination params from raw query-string params
         const { search, page, limit, orderBy } = buildQuery(params, allowedFields);
-        
+
+        // ── Helpers: cover full days so "2026-06-09" means the ENTIRE 9th ──────
+       
         // 3) Base filter — always scope to the caller's company
         const filter: any = {};
 
         if (session.role !== ROLES.SUPER_ADMIN) {
             filter.company = this.em.getReference(Company, session.companyId as number);
         }
-        
+
         // 4) Optional status filter
         if (params?.status) {
             const normalized = params.status.toUpperCase();
             const validStatuses = Object.values(QuoteStatus);
-        
+
             if (!validStatuses.includes(normalized as QuoteStatus)) {
-            throw new BadRequestException(
-                `Invalid status '${params.status}'. Allowed: ${validStatuses.join(", ")}`,
-            );
+                throw new BadRequestException(
+                    `Invalid status '${params.status}'. Allowed: ${validStatuses.join(", ")}`,
+                );
             }
-        
+
             filter.status = normalized;
         }
-        
-        // 5) Optional search (prefix match on quoteNumber)
+
+        // 5) Optional search (substring match on quoteNumber — finds partial and exact)
         if (search) {
-            filter.quoteNumber = { $ilike: `${search}%` };
+            filter.quoteNumber = { $ilike: `%${search}%` };
         }
-        
+
         // 6) Optional shipment-type filter
         if (params.shipmentType) {
             filter.shipmentType = params.shipmentType;
         }
-        
-        // 7) Optional date-range filter
+
+        // 7) Optional date-range filter (normalized to full days)
         if (params.dateFrom || params.dateTo) {
             filter.createdAt = {};
-            if (params.dateFrom) filter.createdAt.$gte = new Date(params.dateFrom);
-            if (params.dateTo)   filter.createdAt.$lte = new Date(params.dateTo);
+            if (params.dateFrom) filter.createdAt.$gte = startOfDay(params.dateFrom);
+            if (params.dateTo)   filter.createdAt.$lte = endOfDay(params.dateTo);
         }
-         
+
         const orderByClause = Object.entries(orderBy).map(([field, direction]) => ({
             [field]: direction,
         }));
-        
+
         const [idRows, total] = await this.em.findAndCount(Quote, filter, {
             fields: ["id"],           // SELECT id only — minimises data transfer
             limit,
             offset: (page - 1) * limit,
             orderBy: orderByClause,
         });
-        
+
         // 8) Derive page metadata
         const totalPages  = Math.ceil(total / limit) || 1;
         const clampedPage = Math.min(page, totalPages);
         const ids         = idRows.map((q) => q.id);
-        
+
         if (ids.length === 0) {
             return {
-            message: "Quotes retrieved successfully",
-            data: [],
-            meta: {
-                total,
-                page,
-                limit,
-                totalPages,
-                hasNextPage: false,
-                hasPrevPage: clampedPage > 1,
-                sort: orderBy,
-            },
+                message: "Quotes retrieved successfully",
+                data: [],
+                meta: {
+                    total,
+                    page,
+                    limit,
+                    totalPages,
+                    hasNextPage: false,
+                    hasPrevPage: clampedPage > 1,
+                    sort: orderBy,
+                },
             };
         }
-        
+
         const quotes = await this.em.find(
             Quote,
             { id: { $in: ids } },
@@ -916,27 +919,26 @@ export class QuoteService {
                     "addresses.addressBookEntry.address.country",
                     "addresses.addressBookEntry.address.state",
 
-                    // Line items — keep only the units relation (add whatever scalar
-                    // fields you actually read from the units entity, e.g. id, name)
+                    // Line items — keep only the units relation
                     "lineItems.measurementUnit",
                     "lineItems.units.weight",
                 ],
                 orderBy: orderByClause,
             },
         );
-        
+
         // 9) Return paginated response
         return {
             message: "Quotes retrieved successfully",
             data: quotes,
             meta: {
-            total,
-            page,
-            limit,
-            totalPages,
-            hasNextPage: clampedPage < totalPages,
-            hasPrevPage: clampedPage > 1,
-            sort: orderBy,
+                total,
+                page,
+                limit,
+                totalPages,
+                hasNextPage: clampedPage < totalPages,
+                hasPrevPage: clampedPage > 1,
+                sort: orderBy,
             },
         };
     }
