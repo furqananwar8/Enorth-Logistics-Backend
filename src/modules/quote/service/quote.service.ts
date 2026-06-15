@@ -1156,8 +1156,54 @@ export class QuoteService {
             })),
             populate: [
                 "quote",
-                "user"
+                "quote.addresses",
+                "quote.addresses.addressBookEntry",
+                "quote.addresses.addressBookEntry.address",
+                "quote.addresses.address",
             ],
+            fields: [
+                    "quote.name",
+                    "quote.quoteId",
+                    "createdAt",
+                    "quote.shipmentType",
+
+                    // Direct address on quote address
+                    "quote.addresses.id",
+                    "quote.addresses.type",
+                    "quote.addresses.address",
+                    "quote.addresses.address.id",
+                    "quote.addresses.address.address1",
+                    "quote.addresses.address.address2",
+                    "quote.addresses.address.unit",
+                    "quote.addresses.address.postalCode",
+                    "quote.addresses.address.city",
+                    "quote.addresses.address.state",
+                    "quote.addresses.address.country",
+                    "quote.addresses.addressBookEntry",
+                    "quote.addresses.addressBookEntry.id",
+                    "quote.addresses.addressBookEntry.companyName",
+                    "quote.addresses.addressBookEntry.contactName",
+                    "quote.addresses.addressBookEntry.phoneNumber",
+                    "quote.addresses.addressBookEntry.email",
+                    "quote.addresses.addressBookEntry.isResidential",
+                    "quote.addresses.addressBookEntry.address",
+                    "quote.addresses.addressBookEntry.address.id",
+                    "quote.addresses.addressBookEntry.address.address1",
+                    "quote.addresses.addressBookEntry.address.address2",
+                    "quote.addresses.addressBookEntry.address.unit",
+                    "quote.addresses.addressBookEntry.address.postalCode",
+                    "quote.addresses.addressBookEntry.address.city",
+                    "quote.addresses.addressBookEntry.address.state",
+                    "quote.addresses.addressBookEntry.address.country",
+
+                    // Address-book path
+                    "quote.addresses.addressBookEntry.address.country",
+                    "quote.addresses.addressBookEntry.address.state",
+
+                    // Line items — keep only the units relation
+                    "quote.lineItems.measurementUnit",
+                    "quote.lineItems.units.weight",
+                ]
             }
         );
 
@@ -1186,7 +1232,56 @@ export class QuoteService {
                 company: session.companyId,
             },
             {
-                populate: ['quote', 'user'],
+                populate: [
+                    "quote", 
+                    "quote.addresses",
+                    "quote.addresses.addressBookEntry",
+                    "quote.addresses.addressBookEntry.address",
+                    "quote.addresses.address"
+                ],
+                 fields: [
+                    "quote.name",
+                    "quote.quoteId",
+                    "createdAt",
+                    "quote.shipmentType",
+
+                    // Direct address on quote address
+                    "quote.addresses.id",
+                    "quote.addresses.type",
+                    "quote.addresses.address",
+                    "quote.addresses.address.id",
+                    "quote.addresses.address.address1",
+                    "quote.addresses.address.address2",
+                    "quote.addresses.address.unit",
+                    "quote.addresses.address.postalCode",
+                    "quote.addresses.address.city",
+                    "quote.addresses.address.state",
+                    "quote.addresses.address.country",
+                    "quote.addresses.addressBookEntry",
+                    "quote.addresses.addressBookEntry.id",
+                    "quote.addresses.addressBookEntry.companyName",
+                    "quote.addresses.addressBookEntry.contactName",
+                    "quote.addresses.addressBookEntry.phoneNumber",
+                    "quote.addresses.addressBookEntry.email",
+                    "quote.addresses.addressBookEntry.isResidential",
+                    "quote.addresses.addressBookEntry.address",
+                    "quote.addresses.addressBookEntry.address.id",
+                    "quote.addresses.addressBookEntry.address.address1",
+                    "quote.addresses.addressBookEntry.address.address2",
+                    "quote.addresses.addressBookEntry.address.unit",
+                    "quote.addresses.addressBookEntry.address.postalCode",
+                    "quote.addresses.addressBookEntry.address.city",
+                    "quote.addresses.addressBookEntry.address.state",
+                    "quote.addresses.addressBookEntry.address.country",
+
+                    // Address-book path
+                    "quote.addresses.addressBookEntry.address.country",
+                    "quote.addresses.addressBookEntry.address.state",
+
+                    // Line items — keep only the units relation
+                    "quote.lineItems.measurementUnit",
+                    "quote.lineItems.units.weight",
+                ]
             }
         );
 
