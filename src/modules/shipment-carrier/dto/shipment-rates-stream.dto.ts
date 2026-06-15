@@ -75,8 +75,45 @@ class AddressDTO {
   state!: string;
 }
 
-// ─── FedEx Location ──────────────────────────────
+// XPO Location ─────────────────────────────────────
+export enum CountryCode {
+  US = 'US',
+  CA = 'CA',
+  MX = 'MX',
+}
 
+export class XPOLocationDTO {
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  address?: string;
+
+  @IsString()
+  postalCode!: string;
+
+  @IsString()
+  city!: string;
+
+  @IsString()
+  state!: string;
+
+  @IsOptional()
+  @IsEnum(CountryCode)
+  countryCode?: CountryCode = CountryCode.US;
+
+  @IsOptional()
+  @IsString()
+  phoneNumber?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isResidential?: boolean = false;
+}
+
+// ─── FedEx Location ──────────────────────────────
 class FedExLocationDTO {
   @IsString()
   postalCode!: string;
@@ -125,6 +162,16 @@ class TSTDTO {
   @ValidateNested()
   @Type(() => AddressDTO)
   to!: AddressDTO;
+}
+
+class XPODTO {
+  @ValidateNested()
+  @Type(() => XPOLocationDTO)
+  from!: XPOLocationDTO;
+
+  @ValidateNested()
+  @Type(() => XPOLocationDTO)
+  to!: XPOLocationDTO;
 }
 
 class TforceDTO {
@@ -193,6 +240,11 @@ export class ShipmentRatesStreamDTO {
   @ValidateNested()
   @Type(() => TSTDTO)
   tst?: TSTDTO;
+
+  @IsObject()
+  @ValidateNested()
+  @Type(() => XPODTO)
+  xpo?: XPODTO;
 
   @IsObject()
   @ValidateNested()

@@ -407,8 +407,9 @@ export class ShipmentCarrierService {
             dangerousGoods: false,
         };
 
-        const rates = await this.xpoAdapter.getRates(xpoDto);
-        const normalizedRates = this.xpoAdapter.mapXPOToCarrierRate(rates);
-        return normalizedRates;
+        const rates = await this.xpoAdapter.getRates(xpoDto) as any;
+        const normalizedRates = this.xpoAdapter.mapXPOToCarrierRate(rates) as Record<string, any>;
+        const chargesSetByAdmin = [ShipmentType.PACKAGE, ShipmentType.PALLET].includes(dto.shipmentType) ? companyBasedRates.LTLRate : companyBasedRates.FTLRate;
+        return {...normalizedRates, chargesSetByAdmin, finalTotalWithAdminCut: Number(normalizedRates?.totalPrice as number + (chargesSetByAdmin ||0))};
     }
 }

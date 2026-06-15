@@ -7,6 +7,9 @@ import { CreateCarrierShipmentDTO } from "src/modules/shipment-carrier/dto/creat
 import { ShipmentRatesStreamDTO } from "../dto/shipment-rates-stream.dto";
 import type { SessionData } from "express-session";
 import { RequestContextService } from "src/utils/request-context-service";
+import { RolesGuard } from "src/guards/roles.guard";
+import { Role } from "src/decorators/role.decorator";
+import { ROLES } from "src/common/constants/roles";
 
 @Controller("shipment-carriers")
 export class ShipmentCarrierController {
@@ -15,7 +18,8 @@ export class ShipmentCarrierController {
         private readonly requestContextService: RequestContextService
     ) {}
 
-    @UseGuards(SessionAuthGuard)
+    @UseGuards(SessionAuthGuard, RolesGuard)
+    @Role([ROLES.ADMIN, ROLES.USER])
     @Post("/rates")
     async GetShipmentCarriersRates(@Body() dto: ShipmentRatesStreamDTO, @Session() session: SessionData){
         const ctx = await this.requestContextService.resolve({ session, em: this.em });
@@ -25,7 +29,8 @@ export class ShipmentCarrierController {
     }
 
 
-    @UseGuards(SessionAuthGuard)
+    @UseGuards(SessionAuthGuard, RolesGuard)
+    @Role([ROLES.ADMIN, ROLES.USER])
     @Post('/rates/stream')
     async StreamShipmentCarriersRates(
         @Body() dto: ShipmentRatesStreamDTO,
@@ -73,12 +78,15 @@ export class ShipmentCarrierController {
         });
     }
 
-    @UseGuards(SessionAuthGuard)
+    @UseGuards(SessionAuthGuard, RolesGuard)
+    @Role([ROLES.ADMIN, ROLES.USER])
     @Post('/shipments')
     async CreateShipment(@Body() dto: CreateCarrierShipmentDTO, @Session() session: SessionData){
         return this.shipmentCarrierService.createShipment(dto, session);
     }
 
+    @UseGuards(SessionAuthGuard, RolesGuard)
+    @Role([ROLES.ADMIN, ROLES.USER])
     @Post('/webhook-events')
     async ManageWebhookEvents(@Body() dto: any) {
         return dto;

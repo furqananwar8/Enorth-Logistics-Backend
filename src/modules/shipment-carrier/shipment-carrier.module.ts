@@ -55,9 +55,11 @@ import { RequestContextService } from "src/utils/request-context-service";
             provide: XPOAdapter,
             useFactory: () => new XPOAdapter({
                 name: 'xpo',
-                consumerKey: process.env.XPO_CONSUMER_KEY!,
-                consumerSecret: process.env.XPO_CONSUMER_SECRET!,
-                accountNumber: process.env.XPO_ACCOUNT_NUMBER!,
+                consumerKey: getEnv(ENV.XPO_CONSUMER_KEY!),
+                consumerSecret: getEnv(ENV.XPO_CONSUMER_SECRET!),
+                accountNumber: getEnv(ENV.XPO_ACCOUNT_NUMBER!),
+                username: getEnv(ENV.XPO_USERNAME),
+                password: getEnv(ENV.XPO_PASSWORD)
             }),
         },
     ],

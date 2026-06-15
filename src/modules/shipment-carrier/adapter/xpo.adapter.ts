@@ -8,6 +8,8 @@ import { Carrier } from '../dto/create-carrier-shipment.dto';
 interface XPOCredentials {
   consumerKey: string;
   consumerSecret: string;
+  username: string;
+  password: string;
 }
 
 interface XPOTokenResponse {
@@ -15,7 +17,7 @@ interface XPOTokenResponse {
   refresh_token: string;
   scope: string;
   token_type: string;
-  expires_in: number; // 43200 = 12 hours
+  expires_in: number;
 }
 
 // ============================================================================
@@ -126,20 +128,22 @@ class XPOLTLMapper implements CarrierPayloadMapper {
   }
 
   map(req: ShipmentRateRequest, accountNumber: string): unknown {
+    // FIX: Full ISO 8601 with time and timezone (docs: "2018-05-10T12:00:00.000-0700")
     const shipmentDate = req.shipDate
-      ? new Date(req.shipDate).toISOString().split('T')[0]
-      : new Date().toISOString().split('T')[0];
+      ? new Date(req.shipDate).toISOString()
+      : new Date().toISOString();
 
     // Map pallets → XPO commodities
-    const commodities = (req.pallets || []).map((pallet) => {
+    const commodities = (req.pallets || req.packages || []).map((pallet) => {
       const commodity: Record<string, unknown> = {
-        pieceCnt: pallet.unitsOnPallet,
-        packageCode: this.mapPackagingType(pallet.palletUnitType),
+        pieceCnt: pallet.handlingUnits,
+        // FIX: Fallback to packaging for packages that don't have palletUnitType
+        packageCode: this.mapPackagingType(pallet.packaging || pallet.palletUnitType),
         grossWeight: {
           weight: String(pallet.weight),
           weightUom: 'LBS',
         },
-        nmfcClass: pallet.freightClass,
+        nmfcClass: pallet.nmfcClass || '100',
         hazmatInd: pallet.dangerousGoods ?? req.dangerousGoods ?? false,
       };
 
@@ -153,39 +157,56 @@ class XPOLTLMapper implements CarrierPayloadMapper {
           length: pallet.length,
           width: pallet.width,
           height: pallet.height,
-          dimensionsUom: 'Inches',
+          dimensionsUom: 'INCH', // FIX: Must be INCH, not Inches
         };
       }
 
       return commodity;
     });
 
-    return {
+    const payload = {
       shipmentInfo: {
-        shipper: {
-          ...(accountNumber ? { acctMadCd: accountNumber } : {}),
-          address: {
-            postalCd: req.from.postalCode,
-            ...(req.from.city ? { cityName: req.from.city } : {}),
-          },
+       shipper: {
+          address: { postalCd: req.from.postalCode },
         },
+        // shipper: {
+        //   // FIX: acctInstId per docs, not acctMadCd
+        //   ...(accountNumber ? { acctInstId: accountNumber } : {}),
+        //   address: {
+        //     postalCd: req.from.postalCode,
+        //     // Only include cityName for Mexico (postal codes not used there)
+        //     ...(req.from.countryCode === 'MX' ? { cityName: req.from.city } : {}),
+        //     // ...(req.from.city ? { cityName: req.from.city } : {}),
+        //     // REMOVED: stateCd and countryCd — docs say "*** not used ***"
+        //   },
+        // },
         consignee: {
           address: {
             postalCd: req.to.postalCode,
-            ...(req.to.city ? { cityName: req.to.city } : {}),
+            // Only include cityName for Mexico (postal codes not used there)
+            ...(req.from.countryCode === 'MX' ? { cityName: req.from.city } : {}),
+            // ...(req.to.city ? { cityName: req.to.city } : {}),
+            // REMOVED: stateCd and countryCd — docs say "*** not used ***"
           },
         },
         commodity: commodities,
-        paymentTermCd: 'P', // Prepaid (shipper pays)
+        paymentTermCd: 'P',
         shipmentDate,
-        palletCnt: (req.pallets || []).reduce(
-          (sum, p) => sum + p.unitsOnPallet,
+        // FIX: Added linealFt: 0 (required per docs)
+        linealFt: 0,
+        palletCnt: (req.pallets || req.packages || []).reduce(
+          (sum, p: any) => sum + p.handlingUnits,
           0,
         ),
         hazmatInd: req.dangerousGoods ?? false,
+        // FIX: Added bill2Party (required per docs even when empty)
+        bill2Party: accountNumber
+  ? { acctInstId: accountNumber }
+  : { address: { usZip4: '' } },
         ...(req.services?.residentialPickup
           ? { accessorials: [{ accessorialCd: 'RPU' }] }
           : {}),
+          
         ...(req.services?.residentialDelivery
           ? {
               accessorials: [
@@ -198,6 +219,8 @@ class XPOLTLMapper implements CarrierPayloadMapper {
           : {}),
       },
     };
+
+    return payload;
   }
 
   private mapPackagingType(palletUnitType: string): string {
@@ -224,9 +247,11 @@ class XPOPackageMapper implements CarrierPayloadMapper {
   }
 
   map(req: ShipmentRateRequest, accountNumber: string): unknown {
+    
+    // FIX: Full ISO 8601 with time and timezone
     const shipmentDate = req.shipDate
-      ? new Date(req.shipDate).toISOString().split('T')[0]
-      : new Date().toISOString().split('T')[0];
+      ? new Date(req.shipDate).toISOString()
+      : new Date().toISOString();
 
     const commodities = (req.packages || []).map((pkg) => {
       const commodity: Record<string, unknown> = {
@@ -236,7 +261,7 @@ class XPOPackageMapper implements CarrierPayloadMapper {
           weight: String(pkg.weight),
           weightUom: pkg.weightUnit || 'LBS',
         },
-        nmfcClass: '100', // default class for parcels
+        nmfcClass: '100',
         hazmatInd: false,
       };
 
@@ -245,17 +270,15 @@ class XPOPackageMapper implements CarrierPayloadMapper {
           length: pkg.length,
           width: pkg.width,
           height: pkg.height,
-          dimensionsUom: 'Inches',
+          dimensionsUom: 'INCH', // FIX: Must be INCH, not Inches
         };
       }
 
       return commodity;
     });
 
-    return {
+    const payload = {
       shipmentInfo: {
-        shipper: {
-          ...(accountNumber ? { acctMadCd: accountNumber } : {}),
           address: { postalCd: req.from.postalCode },
         },
         consignee: {
@@ -264,8 +287,16 @@ class XPOPackageMapper implements CarrierPayloadMapper {
         commodity: commodities,
         paymentTermCd: 'P',
         shipmentDate,
-      },
+        // FIX: Added linealFt: 0
+        linealFt: 0,
+        // FIX: Added bill2Party
+        bill2Party: accountNumber
+  ? { acctInstId: accountNumber }
+  : { address: { usZip4: '' } },
+
     };
+
+    return payload;
   }
 
   private mapPackagingType(type?: string): string {
@@ -292,7 +323,6 @@ export class XPOAdapter implements CarrierAdapter {
   private readonly accountNumber: string;
   private readonly mappers: CarrierPayloadMapper[];
 
-  // XPO tokens last 12 hours — cache them
   private tokenCache: {
     accessToken: string;
     refreshToken: string;
@@ -304,26 +334,28 @@ export class XPOAdapter implements CarrierAdapter {
     consumerKey: string;
     consumerSecret: string;
     accountNumber: string;
+    username: string;
+    password: string;
   }) {
     this.credentials = {
       consumerKey: params.consumerKey,
       consumerSecret: params.consumerSecret,
+      username: params.username,
+      password: params.password,
     };
     this.accountNumber = params.accountNumber;
     this.mappers = [new XPOLTLMapper(), new XPOPackageMapper()];
   }
 
   // --------------------------------------------------------------------------
-  // AUTH  — XPO uses Basic auth (base64 key:secret) to get a bearer token
+  // AUTH
   // --------------------------------------------------------------------------
 
   private async getAuthToken(): Promise<string> {
-    // Still valid with 5-min buffer
     if (this.tokenCache && this.tokenCache.expiresAt > Date.now() + 300_000) {
       return this.tokenCache.accessToken;
     }
 
-    // Try refresh token first if we have one
     if (this.tokenCache?.refreshToken) {
       try {
         return await this.refreshAuthToken(this.tokenCache.refreshToken);
@@ -336,10 +368,15 @@ export class XPOAdapter implements CarrierAdapter {
   }
 
   private async fetchNewToken(): Promise<string> {
-    // XPO uses base64(consumerKey:consumerSecret) as the Basic auth value
     const basicAuth = Buffer.from(
       `${this.credentials.consumerKey}:${this.credentials.consumerSecret}`,
     ).toString('base64');
+
+    const body = new URLSearchParams({
+      grant_type: 'password',
+      username: this.credentials.username,
+      password: this.credentials.password,
+    });
 
     const response = await fetch(this.tokenUrl, {
       method: 'POST',
@@ -347,7 +384,7 @@ export class XPOAdapter implements CarrierAdapter {
         Authorization: `Basic ${basicAuth}`,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: 'grant_type=client_credentials',
+      body: body.toString(),
     });
 
     if (!response.ok) {
@@ -410,26 +447,35 @@ export class XPOAdapter implements CarrierAdapter {
   // FETCH RATES
   // --------------------------------------------------------------------------
 
-  async fetchRates(carrierPayload: unknown): Promise<unknown> {
+ async fetchRates(carrierPayload: unknown): Promise<unknown> {
     const token = await this.getAuthToken();
+    
+    const url = `${this.baseUrl}/rating/1.0/ratequotes`;
+    
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/json',
+                'User-Agent': 'YourApp/1.0',
+            },
+            body: JSON.stringify(carrierPayload),
+        });
 
-    const response = await fetch(`${this.baseUrl}/rating/1.0/ratequotes`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json',
-      },
-      body: JSON.stringify(carrierPayload),
-    });
+        const responseBody = await response.text();
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`XPO API error: ${response.status} - ${errorText}`);
+        if (!response.ok) {
+            throw new Error(`XPO API error: ${response.status} - ${responseBody}`);
+        }
+
+        return JSON.parse(responseBody);
+    } catch (error) {
+        // Re-throw with more context
+        throw new Error(`fetch failed: ${error instanceof Error ? error.message : String(error)}`);
     }
-
-    return response.json();
-  }
+}
 
   // --------------------------------------------------------------------------
   // PARSE RESPONSE
@@ -462,10 +508,10 @@ export class XPOAdapter implements CarrierAdapter {
   }
 
   // --------------------------------------------------------------------------
-  // GET RATES  (top-level convenience)
+  // GET RATES
   // --------------------------------------------------------------------------
 
-  async getRates(req: any): Promise<unknown> {
+  async getRates(req: any) {
     const payload = this.buildRequest(req);
     return this.fetchRates(payload);
   }
@@ -474,34 +520,47 @@ export class XPOAdapter implements CarrierAdapter {
   // MAP TO NORMALIZED CARRIER RATE
   // --------------------------------------------------------------------------
 
-  mapXPOToCarrierRate(xpoResponse: any): any[] {
-    const rate = xpoResponse?.rateQuote;
-    if (!rate) return [];
+  mapXPOToCarrierRate(xpoResponse: any) {
+    const data = xpoResponse?.data;
+    if (!data) return [];
 
-    const accessorials = rate.shipmentInfo?.accessorials ?? [];
+    const rateQuote = data.rateQuote;
+    const transitTime = data.transitTime;
+    if (!rateQuote || !transitTime) return [];
 
-    return [
-      {
+    const shipmentInfo = rateQuote.shipmentInfo ?? {};
+    const accessorials = shipmentInfo.accessorials ?? [];
+
+    // Pick primary charge (USD preferred, fallback to first)
+    const primaryCharge = rateQuote.totCharge?.find(
+      (c: any) => c.currencyCd === 'USD',
+    ) ?? rateQuote.totCharge?.[0];
+
+    // Find FSC specifically from accessorials array
+    const fscAccessorial = accessorials.find(
+      (a: any) => a.accessorialCd === 'FSC',
+    );
+
+    return {
         carrier: Carrier.XPO,
         serviceType: 'LTL',
         serviceName: 'XPO LTL Freight',
-        totalPrice: rate.totalChargeAmt?.amt ?? null,
-        totalDiscount: rate.totalDiscountAmt?.amt ?? 0,
-        discountPercent: rate.actlDiscountPct ?? 0,
-        currency: rate.totalChargeAmt?.currencyCd ?? 'USD',
-        linehaulCharge: rate.linehaulChrgAmt?.amt ?? null,
-        fuelSurcharge: rate.fscAmt?.amt ?? 0,
+        totalPrice: primaryCharge?.amt ?? null,
+        totalDiscount: rateQuote.totDiscountAmt?.amt ?? 0,
+        discountPercent: rateQuote.actlDiscountPct ?? 0,
+        currency: primaryCharge?.currencyCd ?? 'USD',
+        linehaulCharge: null, // XPO does not expose a separate linehaul field
+        fuelSurcharge: fscAccessorial?.chargeAmt?.amt ?? 0,
         totalSurcharges: accessorials.reduce(
           (sum: number, a: any) => sum + (a.chargeAmt?.amt ?? 0),
           0,
         ),
-        estimatedDeliveryDays: rate.transitDays
-          ? `${rate.transitDays} business day${rate.transitDays === 1 ? '' : 's'}`
+        estimatedDeliveryDays: transitTime.transitDays
+          ? `${transitTime.transitDays} business day${transitTime.transitDays === 1 ? '' : 's'}`
           : 'Varies by destination',
-        estimatedDeliveryDate: rate.estimatedDeliveryDate ?? null,
-        confirmationNumber: rate.confirmationNbr ?? null,
+        estimatedDeliveryDate: transitTime.estdDlvrDate ?? null,
+        confirmationNumber: rateQuote.confirmationNbr ?? null,
         transactionId: null,
-      },
-    ];
+    }
   }
 }
