@@ -10,6 +10,7 @@ import { XPOAdapter } from "./adapter/xpo.adapter";
 import { MockCarrierTrackingService } from "../mock-carrier-tracking/service/mock-carrier-tracking.service";
 import { BullModule } from "@nestjs/bullmq";
 import { PaymentModule } from "../payment/payment.module";
+import { RequestContextService } from "src/utils/request-context-service";
 
 @Module({
     imports: [
@@ -20,6 +21,7 @@ import { PaymentModule } from "../payment/payment.module";
     ],
     controllers: [ShipmentCarrierController],
     providers: [
+        RequestContextService,
         ShipmentCarrierService,
         MockCarrierTrackingService,
         {

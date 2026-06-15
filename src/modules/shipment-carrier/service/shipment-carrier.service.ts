@@ -15,6 +15,7 @@ import { getEnv } from "src/utils/getEnv";
 import { ENV } from "src/common/constants/env";
 import { PaymentService } from "src/modules/payment/service/payment.service";
 import { SessionData } from "express-session";
+import { RequestContextService } from "src/utils/request-context-service";
 
 @Injectable()
 export class ShipmentCarrierService {
@@ -25,17 +26,19 @@ export class ShipmentCarrierService {
         private readonly tforceAdapter: TForceAdapter,
         private readonly xpoAdapter: XPOAdapter,
         private readonly mockTracking: MockCarrierTrackingService,
-        private readonly paymentService: PaymentService
+        private readonly paymentService: PaymentService,
+        private readonly requestContextService: RequestContextService
     ) {}
     
     async createShipment(dto: CreateCarrierShipmentDTO, session: SessionData) {
         let carrierResponse: any;
 
-        // ✅ Add TFORCE to allowed carriers
         if (![Carrier.FEDEX, Carrier.TST, Carrier.TFORCE].includes(dto.carrier)) {
             throw new BadRequestException("This carrier hasn't been implemented for shipment");
         }
 
+        const ctx = await this.requestContextService.resolve({ session, em: this.em });
+        
         const quote = await this.em.findOne(
             Quote,
             { id: dto.quoteId },
@@ -71,11 +74,15 @@ export class ShipmentCarrierService {
             throw new BadRequestException("TFORCE support only pallet & FTL shipment type for shipment creation")
         }
 
+        const companyBasedRates = ([ShipmentType.PACKAGE, ShipmentType.PALLET].includes(quote.shipmentType as any) ? ctx.company?.ltlRateToBeChargedPerShipment : ctx.company?.ftlRateToBeChargedPerShipment) || 0;
+
         const selectedRateCharge = Number(dto.selectedRate.totalCharge);
+
+        const finalBalanceToDeduct = Number(companyBasedRates) + Number(selectedRateCharge)
         
         const walletBalance = await this.paymentService.getWalletBalance(session);
         
-        if (walletBalance < selectedRateCharge) {
+        if (walletBalance < finalBalanceToDeduct) {
             throw new BadRequestException(`Insufficient wallet balance. Required: ${selectedRateCharge.toFixed(2)}, Available: ${walletBalance.toFixed(2)}`)
         }
         
@@ -139,7 +146,6 @@ export class ShipmentCarrierService {
             shipment.carrier = Carrier.TST;
         }
 
-        // ✅ TForce
         if (dto.carrier === Carrier.TFORCE) {
             carrierResponse = await this.tforceAdapter.createShipment(dto, quote);
 
@@ -175,8 +181,7 @@ export class ShipmentCarrierService {
             }
 
             const rates: Array<{ code: string; value: string }> = rateDetail?.rate ?? [];
-            const findRate = (code: string) =>
-                Number(rates.find((r) => r.code === code)?.value || 0);
+            const findRate = (code: string) => Number(rates.find((r) => r.code === code)?.value || 0);
 
             const grossCharge   = findRate('LND_GROSS');
             const discount      = findRate('DSCNT');
@@ -237,10 +242,12 @@ export class ShipmentCarrierService {
         await this.em.flush();
 
         const chargeAmount = shipment.totalNetCharge || shipment.totalCharge || 0;
+        const finalAmountToDeduct = Number(chargeAmount) + Number(companyBasedRates);
+        
         if (chargeAmount > 0) {
             try {
                 await this.paymentService.deductFromWallet(session, {
-                    amount: chargeAmount,
+                    amount: finalAmountToDeduct,
                     description: `Shipment ${shipment.trackingNumber} via ${dto.carrier}`,
                 });
             } catch (walletError: any) {
@@ -268,25 +275,25 @@ export class ShipmentCarrierService {
         };
     }
 
-    async getShipmentCarriersRates(dto: any) {
+    async getShipmentCarriersRates(dto: any, companyBasedRates: Record<string, any>) {
         const [
             tstResult, 
             fedexResult, 
-            tforceResult 
-            // xpoResult
+            tforceResult,
+            xpoResult
         ] = await Promise.all([
-            this.getTSTRates(dto)
+            this.getTSTRates(dto, companyBasedRates)
                 .then(r => ({ success: true as const, data: r }))
                 .catch(e => ({ success: false as const, error: e.message })),
-            this.getFedExRates(dto)
+            this.getFedExRates(dto, companyBasedRates)
                 .then(r => ({ success: true as const, data: r }))
                 .catch(e => ({ success: false as const, error: e.message })),
-            this.getTForceRates(dto)
+            this.getTForceRates(dto, companyBasedRates)
                 .then(r => ({ success: true as const, data: r }))
-                .catch(e => ({ success: false as const, error: e.message }))
-            // this.getXPORates(dto)
-            //     .then(r => ({ success: true as const, data: r }))
-            //     .catch(e => ({ success: false as const, error: e.message })),
+                .catch(e => ({ success: false as const, error: e.message })),
+            this.getXPORates(dto, companyBasedRates)
+                .then(r => ({ success: true as const, data: r }))
+                .catch(e => ({ success: false as const, error: e.message })),
         ]);
         // console.log({fedexResult})
         return {
@@ -297,17 +304,18 @@ export class ShipmentCarrierService {
             tstError: tstResult.success ? null : tstResult.error,
             tforceQuotes: tforceResult.success ? tforceResult.data : null,
             tforceError: tforceResult.success ? null : tforceResult.error,
-            // xpoQuotes: xpoResult.success ? xpoResult.data : null,
-            // xpoError: xpoResult.success ? null : xpoResult.error,
+            xpoQuotes: xpoResult.success ? xpoResult.data : null,
+            xpoError: xpoResult.success ? null : xpoResult.error,
         };
     }
 
     // SSE stream — emits each carrier as it completes
-    getShipmentCarriersRatesStream(dto: any): Observable<MessageEvent> {
+    getShipmentCarriersRatesStream(dto: any, companyBasedRates: Record<string, any>): Observable<MessageEvent> {
         const carriers = [
-            { name: Carrier.FEDEX,   fetch: () => this.getFedExRates(dto) },
-            { name: Carrier.TST,     fetch: () => this.getTSTRates(dto) },
-            { name: Carrier.TFORCE,  fetch: () => this.getTForceRates(dto) }
+            { name: Carrier.FEDEX,   fetch: () => this.getFedExRates(dto, companyBasedRates) },
+            { name: Carrier.TST,     fetch: () => this.getTSTRates(dto, companyBasedRates) },
+            { name: Carrier.TFORCE,  fetch: () => this.getTForceRates(dto, companyBasedRates) },
+            { name: Carrier.XPO, fetch: () => this.getXPORates(dto, companyBasedRates) }
         ];
 
         const streams = carriers.map(c =>
@@ -324,7 +332,7 @@ export class ShipmentCarrierService {
         return merge(...streams);
     }
 
-    private async getFedExRates(fedexDto: any) {
+    private async getFedExRates(fedexDto: any, companyBasedRates: Record<string,any>) {
         const countryCode = fedexDto?.fedex?.from?.countryCode ?? 'US';
         const isUS = countryCode === 'US';
 
@@ -340,12 +348,14 @@ export class ShipmentCarrierService {
         });
         let rates = await fedex.getRates(fedexDto);
         let normalizedRates = fedex.mapFedExToCarrierRate(rates);
-            normalizedRates = normalizedRates.find( rate => rate.serviceType === "FEDEX_GROUND")
+            normalizedRates = normalizedRates.find( rate => rate.serviceType === "FEDEX_GROUND") as any;
 
-        return normalizedRates;
+        const chargesSetByAdmin = [ShipmentType.PACKAGE, ShipmentType.PALLET].includes(fedexDto.shipmentType) ? companyBasedRates.LTLRate : companyBasedRates.FTLRate;
+     
+        return {...normalizedRates, chargesSetByAdmin, finalTotalWithAdminCut: Number(normalizedRates?.totalPrice as number + (chargesSetByAdmin ||0))};
     }
 
-    private async getTSTRates(tstDto: any) {
+    private async getTSTRates(tstDto: any, companyBasedRates: Record<string,any>) {
         const shipmentType = tstDto?.shipmentType as ShipmentType;
         const isFTL = shipmentType === ShipmentType.STANDARD_FTL;
 
@@ -355,10 +365,13 @@ export class ShipmentCarrierService {
         }
 
         const tstAdapter = new TSTCFExpressAdapter();
-        return tstAdapter.getRates(tstDto);
+        let rates = await tstAdapter.getRates(tstDto);
+        
+        const chargesSetByAdmin = [ShipmentType.PACKAGE, ShipmentType.PALLET].includes(tstDto.shipmentType) ? companyBasedRates.LTLRate : companyBasedRates.FTLRate;
+        return {...rates, chargesSetByAdmin, finalTotalWithAdminCut: Number(rates?.totalPrice as number + (chargesSetByAdmin ||0))};
     }
 
-    private async getTForceRates(dto: any) {
+    private async getTForceRates(dto: any, companyBasedRates: Record<string, any>) {
         if([ShipmentType.COURIER, ShipmentType.PACKAGE].includes(dto.shipmentType)) {
             return null;
         }
@@ -375,14 +388,16 @@ export class ShipmentCarrierService {
 
         const rates = await this.tforceAdapter.getRates(tforceDto);
         console.dir({rates}, { depth: null})
-        const normalizedRates = this.tforceAdapter.mapTForceToCarrierRate(rates);
+        let normalizedRates = this.tforceAdapter.mapTForceToCarrierRate(rates) as any;
         
-        if(Array.isArray(normalizedRates)) return normalizedRates[0]
+        if(Array.isArray(normalizedRates)) normalizedRates = normalizedRates[0]
         
-        return normalizedRates;
+        const chargesSetByAdmin = [ShipmentType.PACKAGE, ShipmentType.PALLET].includes(dto.shipmentType) ? companyBasedRates.LTLRate : companyBasedRates.FTLRate;
+
+        return {...normalizedRates, chargesSetByAdmin, finalTotalWithAdminCut: Number(normalizedRates?.totalPrice as number + (chargesSetByAdmin ||0))};
     }
 
-     private async getXPORates(dto: any) {
+     private async getXPORates(dto: any, companyBasedRates: Record<string,any>) {
         const xpoDto = {
             ...dto,
             type: 'PALLET',
@@ -391,7 +406,7 @@ export class ShipmentCarrierService {
             pallets: dto.packages || [],
             dangerousGoods: false,
         };
- 
+
         const rates = await this.xpoAdapter.getRates(xpoDto);
         const normalizedRates = this.xpoAdapter.mapXPOToCarrierRate(rates);
         return normalizedRates;

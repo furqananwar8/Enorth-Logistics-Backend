@@ -306,7 +306,7 @@ export class FedExAdapter implements CarrierAdapter {
   // RATES
   // --------------------------------------------------------------------------
 
-  async getRates(req: ShipmentRateRequest): Promise<any> {
+  async getRates(req: ShipmentRateRequest) {
     const type = (req.shipmentType || req.type || 'PACKAGE').toUpperCase();
     if (!this.LTL_TYPES.has(type) && !this.PARCEL_TYPES.has(type)) {
       throw new BadRequestException(`Unsupported shipmentType: ${req.shipmentType || req.type}`);
@@ -538,7 +538,7 @@ export class FedExAdapter implements CarrierAdapter {
   // RESPONSE MAPPING
   // --------------------------------------------------------------------------
 
-  mapFedExToCarrierRate(fedexQuotes: any, originCountryCode?: string): any[] {
+  mapFedExToCarrierRate(fedexQuotes: any, originCountryCode?: string) {
     if (!fedexQuotes?.output?.rateReplyDetails) return [];
 
     const accountNumber =

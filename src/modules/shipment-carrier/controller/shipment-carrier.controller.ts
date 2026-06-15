@@ -6,26 +6,36 @@ import type { Request, Response } from "express";
 import { CreateCarrierShipmentDTO } from "src/modules/shipment-carrier/dto/create-carrier-shipment.dto";
 import { ShipmentRatesStreamDTO } from "../dto/shipment-rates-stream.dto";
 import type { SessionData } from "express-session";
+import { RequestContextService } from "src/utils/request-context-service";
 
 @Controller("shipment-carriers")
 export class ShipmentCarrierController {
     constructor(private readonly em: EntityManager,
-        private readonly shipmentCarrierService: ShipmentCarrierService
+        private readonly shipmentCarrierService: ShipmentCarrierService,
+        private readonly requestContextService: RequestContextService
     ) {}
 
     @UseGuards(SessionAuthGuard)
     @Post("/rates")
-    async GetShipmentCarriersRates(@Body() dto: ShipmentRatesStreamDTO){
-        return this.shipmentCarrierService.getShipmentCarriersRates(dto);
+    async GetShipmentCarriersRates(@Body() dto: ShipmentRatesStreamDTO, @Session() session: SessionData){
+        const ctx = await this.requestContextService.resolve({ session, em: this.em });
+
+        const companyBasedRates = { LTLRate: ctx.company?.ltlRateToBeChargedPerShipment, FTLRate: ctx.company?.ftlRateToBeChargedPerShipment }
+        return this.shipmentCarrierService.getShipmentCarriersRates(dto, companyBasedRates);
     }
 
 
+    @UseGuards(SessionAuthGuard)
     @Post('/rates/stream')
     async StreamShipmentCarriersRates(
         @Body() dto: ShipmentRatesStreamDTO,
         @Res() res: Response,
         @Req() req: Request,
+        @Session() session: SessionData
     ) {
+        const ctx = await this.requestContextService.resolve({ session, em: this.em });
+
+        const companyBasedRates = { LTLRate: ctx.company?.ltlRateToBeChargedPerShipment, FTLRate: ctx.company?.ftlRateToBeChargedPerShipment }
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
@@ -33,7 +43,7 @@ export class ShipmentCarrierController {
 
         res.flushHeaders();
 
-        const stream$ = this.shipmentCarrierService.getShipmentCarriersRatesStream(dto);
+        const stream$ = this.shipmentCarrierService.getShipmentCarriersRatesStream(dto,companyBasedRates);
 
         const subscription = stream$.subscribe({
             next: (event) => {

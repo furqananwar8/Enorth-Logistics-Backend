@@ -948,7 +948,7 @@ export class TForceAdapter implements CarrierAdapter {
   // MAP TO NORMALIZED CARRIER RATE  (mirrors FedExAdapter.mapFedExToCarrierRate)
   // --------------------------------------------------------------------------
 
-  mapTForceToCarrierRate(tforceResponse: any): any[] {
+  mapTForceToCarrierRate(tforceResponse: any){
     const detailArray = tforceResponse?.detail;
     if (!Array.isArray(detailArray) || detailArray.length === 0) return [];
 

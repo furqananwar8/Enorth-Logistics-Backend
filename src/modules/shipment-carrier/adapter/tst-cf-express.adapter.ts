@@ -19,7 +19,7 @@ export class TSTCFExpressAdapter implements CarrierAdapter {
     this.mapper = new TSTCFExpressMapper();
   }
 
-  async getRates(req: any): Promise<any[]> {
+  async getRates(req: any){
     const carrierPayload = this.buildRequest(req);
     const carrierResponse = await this.fetchRates(carrierPayload);
     return this.parseResponse(carrierResponse);
