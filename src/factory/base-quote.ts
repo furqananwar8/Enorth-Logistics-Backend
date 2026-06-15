@@ -249,7 +249,7 @@ export abstract class BaseQuote {
         const source = servicesData ?? {};
         
         const allowedFields = requiredServiceFields[shipmentType];
-        
+
         for (const field of allowedFields) {
             if (source[field] !== undefined) {
                 (serviceEntity as any)[field] = source[field];
