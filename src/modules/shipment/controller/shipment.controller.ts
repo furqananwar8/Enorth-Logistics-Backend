@@ -4,11 +4,15 @@ import { SessionAuthGuard } from "src/guards/sessionAuth.guard";
 import { ShipmentService } from "../service/shipment.service";
 import { CreateShipmentDTO } from "../dto/create-shipment.dto";
 import { UpdateShipmentDTO } from "../dto/update-shipment.dto";
+import { RolesGuard } from "src/guards/roles.guard";
+import { Role } from "src/decorators/role.decorator";
+import { ROLES } from "src/common/constants/roles";
 @Controller("shipments")
 export class ShipmentController {
     constructor(private readonly shipmentService: ShipmentService) {}
 
-    @UseGuards(SessionAuthGuard)
+    @UseGuards(SessionAuthGuard, RolesGuard)
+    @Role([ROLES.ADMIN, ROLES.USER])
     @Post("/")
     async createShipment(
       @Body() dto: CreateShipmentDTO,
@@ -17,7 +21,8 @@ export class ShipmentController {
       return this.shipmentService.create(dto, session);
     }
 
-    @UseGuards(SessionAuthGuard)
+    @UseGuards(SessionAuthGuard, RolesGuard)
+    @Role([ROLES.ADMIN, ROLES.USER])
     @Patch("/:id")
     async updateShipment(
       @Body() dto: UpdateShipmentDTO,

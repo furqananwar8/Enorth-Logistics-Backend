@@ -33,7 +33,7 @@ export class ShipmentCarrierService {
     async createShipment(dto: CreateCarrierShipmentDTO, session: SessionData) {
         let carrierResponse: any;
 
-        if (![Carrier.FEDEX, Carrier.TST, Carrier.TFORCE].includes(dto.carrier)) {
+        if (![Carrier.FEDEX, Carrier.TST, Carrier.TFORCE, Carrier.XPO].includes(dto.carrier)) {
             throw new BadRequestException("This carrier hasn't been implemented for shipment");
         }
 
@@ -233,6 +233,68 @@ export class ShipmentCarrierService {
             }
         }
 
+        if (dto.carrier === Carrier.XPO) {
+            // ═══════════════════════════════════════════════════════════════════════
+            // 1. CREATE BOL (dto.selectedRate already contains the live-fetched rate)
+            // ═══════════════════════════════════════════════════════════════════════
+            const carrierResponse = await this.xpoAdapter.createShipment(dto, quote);
+
+            const bolId = carrierResponse?.bolId;
+            if (!bolId) {
+                throw new BadRequestException(
+                    'XPO BOL creation failed: No bolInstId returned from carrier'
+                );
+            }
+
+            // ═══════════════════════════════════════════════════════════════════════
+            // 2. USE DTO SELECTED RATE (already verified/fetched before this step)
+            // ═══════════════════════════════════════════════════════════════════════
+            const selectedRate = dto.selectedRate ?? {};
+            const rateCurrency = selectedRate.currency ?? 'USD';
+            const rateTotal    = selectedRate.totalCharge  ?? 0;
+
+            // ── Map shipment fields ───────────────────────────────────────────────
+            shipment.bolNumber       = bolId;
+            shipment.carrierQuoteId  = bolId;
+            shipment.trackingNumber  = carrierResponse.proNumber;
+
+            shipment.serviceName = selectedRate.serviceName ?? 'XPO LTL Freight';
+            shipment.serviceType = selectedRate.serviceType ?? 'LTL';
+            shipment.shipDate    = dto.shipDate ? new Date(dto.shipDate) : new Date();
+            shipment.currency    = rateCurrency;
+
+            // BOL PDF if available
+            shipment.shippingLabels = carrierResponse?.bolPdfBase64 ?? null;
+
+            // Pricing from DTO selectedRate (the live rate fetched before booking)
+            shipment.totalBaseCharge       = selectedRate.totalCharge ?? 0;
+            shipment.totalSurcharges       = selectedRate.totalSurcharges ?? 0;
+            shipment.totalFreightDiscounts = selectedRate.totalDiscount ?? 0;
+            shipment.totalNetCharge        = rateTotal;
+            shipment.totalCharge           = rateTotal;
+            shipment.carrier               = Carrier.XPO;
+
+            // Persist surcharges from selectedRate
+            const quoteSurcharges = selectedRate.surcharges ?? [];
+            if (quoteSurcharges.length > 0) {
+                const surchargeEntities = quoteSurcharges
+                    .filter((s: any) => (s.amount ?? 0) > 0)
+                    .map((s: any) =>
+                        this.em.create(Surcharge, {
+                            shipment,
+                            carrier: Carrier.XPO,
+                            name: s.name || s.code || 'Surcharge',
+                            amount: s.amount,
+                            currency: s.currency || rateCurrency,
+                            createdAt: new Date(),
+                        })
+                    );
+                if (surchargeEntities.length > 0) {
+                    shipment.surcharges.add(surchargeEntities);
+                }
+            }
+        }
+
         shipment.tailgateRequiredInFromAddress = dto.tailgatePickup  ?? false;
         shipment.tailgateRequiredInToAddress   = dto.tailgateDelivery ?? false;
         shipment.carrier  = dto.carrier;
@@ -295,7 +357,6 @@ export class ShipmentCarrierService {
                 .then(r => ({ success: true as const, data: r }))
                 .catch(e => ({ success: false as const, error: e.message })),
         ]);
-        // console.log({fedexResult})
         return {
             message: "Rates fetched",
             fedexQuotes: fedexResult.success ? fedexResult.data : null,

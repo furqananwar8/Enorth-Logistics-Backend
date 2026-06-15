@@ -34,6 +34,22 @@ class SelectedRateDto {
   @IsString()
   @IsOptional()
   serviceCode?: string;
+
+  @IsString()
+  @IsOptional()
+  confirmationNumber?: string;
+
+  @IsNumber()
+  @IsOptional()
+  totalSurcharges?: number;
+
+  @IsNumber()
+  @IsOptional()
+  totalDiscount?: number;
+
+  @IsArray()
+  @IsOptional()
+  surcharges?: Record<string, any>[];
 }
 
 export class CreateCarrierShipmentDTO {

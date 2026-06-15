@@ -78,10 +78,16 @@ export class ShipmentService {
   async create(createShipmentDto: CreateShipmentDTO, session: SessionData) {
         //1) Validate and build the quote based on shipment type
         let quote;
+
         if(!createShipmentDto?.quote?.id) {
           quote = await this.buildQuote(createShipmentDto, session);
         } else {
           const quoteDoc: any = await this.em.findOne(Quote, { id: createShipmentDto.quote.id }, { populate: ["addresses", "addresses.addressBookEntry", "addresses.address", "addresses.addressBookEntry.address", "lineItems", "lineItems.units" ]})
+          
+          if(quoteDoc.quoteType !== QuoteType.STANDARD) {
+            throw new BadRequestException("Shipment supports only standard quote shipment types");
+          }
+
           quote = await this.updateQuote(quoteDoc, createShipmentDto, session);
         }  
 

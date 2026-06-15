@@ -33,7 +33,7 @@ export class TrackingService {
             filter["company"] = this.em.getReference(Company, session.companyId as number);
         }
 
-        filter["shipment"] = { $ne: null };
+        filter["shipment.carrier"] = { $ne: null };
 
         if (params?.status) {
             const normalized = params.status.toUpperCase();

@@ -1,5 +1,7 @@
 import { CarrierAdapter } from 'src/types/shipment-carriers';
-import { Carrier } from '../dto/create-carrier-shipment.dto';
+import { Carrier, CreateCarrierShipmentDTO } from '../dto/create-carrier-shipment.dto';
+import { BadRequestException } from '@nestjs/common';
+import { Quote } from 'src/entities/quote.entity';
 
 // ============================================================================
 // XPO API TYPES
@@ -563,4 +565,245 @@ export class XPOAdapter implements CarrierAdapter {
         transactionId: null,
     }
   }
+
+  // ============================================================================
+// XPO ADAPTER — ADD THESE METHODS
+// ============================================================================
+
+async createShipment(dto: CreateCarrierShipmentDTO, quote: Quote): Promise<any> {
+  const token    = await this.getAuthToken();
+  const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 1. RESOLVE ADDRESSES & COMMODITIES
+  // ═══════════════════════════════════════════════════════════════════════
+  const fromAddress = quote.addresses?.find((a: any) => a.type === 'FROM')?.addressBookEntry;
+  const toAddress   = quote.addresses?.find((a: any) => a.type === 'TO')?.addressBookEntry;
+  const units       = quote.lineItems?.units || [];
+
+  if (!fromAddress || !toAddress) {
+    throw new BadRequestException('Quote missing FROM or TO address');
+  }
+
+  const formatPhone = (phone: string): string => {
+    const digits = (phone ?? '').replace(/\D/g, '').slice(-10);
+    return `${digits.slice(0, 3)}-${digits.slice(3)}`;
+  };
+
+  const toXPOTime = (d: Date): string => {
+    const snapped = new Date(d);
+    const mins = snapped.getMinutes();
+    const snappedMins = [0, 15, 30, 45].reduce((prev, curr) =>
+      Math.abs(curr - mins) < Math.abs(prev - mins) ? curr : prev
+    );
+    snapped.setMinutes(snappedMins, 0, 0);
+
+    const hours = snapped.getHours();
+    if (hours < 1)  snapped.setHours(8,  0, 0, 0);
+    if (hours >= 23) snapped.setHours(22, 0, 0, 0);
+
+    return snapped.toISOString();
+  };
+
+  const shipDate = dto.shipDate ? new Date(dto.shipDate) : new Date();
+
+  const maxDate = new Date();
+  maxDate.setDate(maxDate.getDate() + 30);
+  if (shipDate > maxDate) shipDate.setTime(maxDate.getTime());
+
+  const now = new Date();
+  if (shipDate <= now) {
+    shipDate.setDate(now.getDate());
+    shipDate.setHours(8, 0, 0, 0);
+    if (shipDate <= now) {
+      shipDate.setDate(now.getDate() + 1);
+      shipDate.setHours(8, 0, 0, 0);
+    }
+  }
+
+  const pkupDateISO   = toXPOTime(shipDate);
+  const dockCloseDate = new Date(shipDate.getTime() + 4 * 60 * 60 * 1000);
+  const dockCloseISO  = toXPOTime(dockCloseDate);
+
+  const [firstName, ...lastParts] = (fromAddress.contactName ?? 'Freight Shipper').split(' ');
+  const lastName = lastParts.join(' ') || 'Shipper';
+
+  const commodityLines = units.map((item: any, idx: number) => ({
+    pieceCnt: item.handlingUnits ?? item.units?.length ?? 1,
+    packaging: {
+      packageCd: this.mapPackagingType(item.packaging ?? item.palletUnitType ?? 'PLT'),
+      packageWeight: {
+        weight:    Number(item.weight) || 500,
+        weightUom: item.weightUnit ?? 'LBS',
+      },
+      ...(item.length && item.width && item.height ? {
+        packageDimensions: {
+          length:        item.length,
+          width:         item.width,
+          height:        item.height,
+          dimensionsUom: 'INCH',
+        },
+      } : {}),
+    },
+    grossWeight: {
+      weight:    Number(item.weight) || 500,
+      weightUom: item.weightUnit ?? 'LBS',
+    },
+    desc:      item.description || `Freight Item ${idx + 1}`,
+    nmfcClass: item.nmfcClass ?? '100',
+    hazmatInd: item.dangerousGoods ?? false,
+    ...(item.nmfc ? { nmfcItemCd: item.nmfc } : {}),
+  }));
+
+  const additionalService: Array<{ accsrlCode: string; prepaidOrCollect: string }> = [];
+  if (dto.tailgatePickup)   additionalService.push({ accsrlCode: 'OLG', prepaidOrCollect: 'P' });
+  if (dto.tailgateDelivery) additionalService.push({ accsrlCode: 'DLG', prepaidOrCollect: 'P' });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 2. BUILD & SEND BOL PAYLOAD
+  // ═══════════════════════════════════════════════════════════════════════
+  const bolPayload: any = {
+    autoAssignPro: true,
+    bol: {
+      requester: {
+        role: 'S',
+        requester: { firstName, lastName },
+      },
+      shipper: {
+        address: {
+          name:         fromAddress.companyName ?? fromAddress.contactName ?? '',
+          addressLine1: fromAddress.address.address1 ?? '',
+          addressLine2: fromAddress.address.address2 ?? '',
+          cityName:     fromAddress.address.city ?? '',
+          stateCd:      fromAddress.address.state ?? '',
+          countryCd:    fromAddress.address.country === 'CA' ? 'CN' : 'US',
+          postalCd:     fromAddress.address.postalCode ?? '',
+        },
+        contactInfo: {
+          companyName: fromAddress.companyName ?? '',
+          fullName:    fromAddress.contactName ?? '',
+          email: { emailAddr: fromAddress.email ?? '' },
+          phone: { phoneNbr: formatPhone(fromAddress.phoneNumber ?? '') },
+        },
+      },
+      consignee: {
+        address: {
+          name:         toAddress.companyName ?? toAddress.contactName ?? '',
+          addressLine1: toAddress.address.address1 ?? '',
+          addressLine2: toAddress.address.address2 ?? '',
+          cityName:     toAddress.address.city ?? '',
+          stateCd:      toAddress.address.state ?? '',
+          countryCd:    toAddress.address.country === 'CA' ? 'CN' : 'US',
+          postalCd:     toAddress.address.postalCode ?? '',
+        },
+        contactInfo: {
+          companyName: toAddress.companyName ?? '',
+          fullName:    toAddress.contactName ?? '',
+          email: { emailAddr: toAddress.email ?? '' },
+          phone: { phoneNbr: formatPhone(toAddress.phoneNumber ?? '') },
+        },
+      },
+      commodityLine: commodityLines,
+      chargeToCd: 'P',
+      ...(additionalService.length > 0 ? { additionalService } : {}),
+      pickupInfo: {
+        pkupDate:      pkupDateISO,
+        pkupTime:      pkupDateISO,
+        dockCloseTime: dockCloseISO,
+        contact: {
+          companyName: fromAddress.companyName ?? '',
+          fullName:    fromAddress.contactName ?? '',
+          phone: { phoneNbr: formatPhone(fromAddress.phoneNumber ?? '') },
+        },
+      },
+      remarks: `Quote Reference: ${quote.id ?? ''}`,
+    },
+  };
+
+
+  const bolUrl = `${this.baseUrl}/billoflading/1.0/billsoflading?testMode=${testMode}`;
+  const bolResponse = await fetch(bolUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization:  `Bearer ${token}`,
+      Accept:         'application/json',
+    },
+    body: JSON.stringify(bolPayload),
+  });
+
+  const bolData = await bolResponse.json();
+
+  const bolInstId = bolData.data?.bolInfo?.bolInstId;
+  if (!bolResponse.ok || !bolInstId) {
+    const errorMsg =
+      bolData.error?.message ??
+      bolData.errors?.[0]?.message ??
+      'Unknown BOL error';
+    throw new BadRequestException(`XPO BOL creation failed: ${errorMsg}`);
+  }
+
+  const pkupTrmnlSic = bolData.data?.bolInfo?.pkupTrmnlSic ?? null;
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 3. FETCH FULL BOL DETAILS
+  // ═══════════════════════════════════════════════════════════════════════
+  let fullBolData: any = null;
+  try {
+    const getBolUrl = `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}?testMode=${testMode}`;
+    const getResponse = await fetch(getBolUrl, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    });
+    if (getResponse.ok) {
+      fullBolData = await getResponse.json();
+    }
+  } catch (err) {
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 4. FETCH BOL PDF
+  // ═══════════════════════════════════════════════════════════════════════
+  let bolPdfBase64: string | null = null;
+  try {
+    const pdfUrl = `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/pdf?testMode=${testMode}`;
+    const pdfResponse = await fetch(pdfUrl, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    });
+    if (pdfResponse.ok) {
+      const pdfData = await pdfResponse.json();
+      bolPdfBase64 = pdfData.data?.bolpdf?.bolPdfImage ?? null;
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 5. RETURN BOL DETAILS
+  // ═══════════════════════════════════════════════════════════════════════
+  return {
+    raw:          { bol: bolData, fullBol: fullBolData },
+    bolId:        bolInstId,
+    proNumber:    bolData.data?.bolInfo?.proNbr ?? null,
+    pkupTrmnlSic,
+    pkupConfNbr:  bolData.data?.bolInfo?.pkupConfNbr ?? null,
+    pkupCallDate: bolData.data?.bolInfo?.pkupCallDate ?? null,
+    pkupCallSeq:  bolData.data?.bolInfo?.pkupCallSeq ?? null,
+    bolPdfBase64,
+  };
+}
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+private addHoursToISO(isoString: string, hours: number): string {
+  const d = new Date(isoString);
+  d.setHours(d.getHours() + hours);
+  return d.toISOString();
+}
+
+private mapPackagingType(type?: string): string {
+  const map: Record<string, string> = {
+    BOX: 'BOX', PALLET: 'PLT', SKID: 'SKD', CRATE: 'CRT',
+    BUNDLE: 'BDL', CARTON: 'CAS', PIECES: 'PCS',
+  };
+  return map[type?.toUpperCase() ?? ''] ?? 'PLT';
+}
 }
