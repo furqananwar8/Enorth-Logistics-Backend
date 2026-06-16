@@ -77,6 +77,9 @@ export class Shipment {
     @Property({ nullable: true })
     lastEventAt?: Date;
 
+    @Property({ nullable: true })
+    lastTrackedAt?: Date;
+
     @Property({ type: 'text', nullable: true })
     shippingLabels?: string | null;
 

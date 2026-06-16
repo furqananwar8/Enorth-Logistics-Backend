@@ -1,6 +1,6 @@
 import { CarrierAdapter } from 'src/types/shipment-carriers';
 import { Carrier, CreateCarrierShipmentDTO } from '../dto/create-carrier-shipment.dto';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Quote } from 'src/entities/quote.entity';
 
 // ============================================================================
@@ -590,7 +590,7 @@ async createShipment(dto: CreateCarrierShipmentDTO, quote: Quote): Promise<any> 
     return `${digits.slice(0, 3)}-${digits.slice(3)}`;
   };
 
-  const toXPOTime = (d: Date): string => {
+  const snapTime = (d: Date): Date => {
     const snapped = new Date(d);
     const mins = snapped.getMinutes();
     const snappedMins = [0, 15, 30, 45].reduce((prev, curr) =>
@@ -602,7 +602,21 @@ async createShipment(dto: CreateCarrierShipmentDTO, quote: Quote): Promise<any> 
     if (hours < 1)  snapped.setHours(8,  0, 0, 0);
     if (hours >= 23) snapped.setHours(22, 0, 0, 0);
 
-    return snapped.toISOString();
+    return snapped;
+  };
+
+  const toXPOTime = (d: Date): string => snapTime(d).toISOString();
+
+  const parseTimeStr = (timeStr: string | null | undefined, fallbackHour: number): { h: number; m: number } => {
+    if (!timeStr) return { h: fallbackHour, m: 0 };
+    const match = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    if (!match) return { h: fallbackHour, m: 0 };
+    let h = parseInt(match[1]);
+    const m = parseInt(match[2]);
+    const ampm = match[3]?.toUpperCase();
+    if (ampm === 'PM' && h !== 12) h += 12;
+    if (ampm === 'AM' && h === 12) h = 0;
+    return { h, m };
   };
 
   const shipDate = dto.shipDate ? new Date(dto.shipDate) : new Date();
@@ -611,19 +625,21 @@ async createShipment(dto: CreateCarrierShipmentDTO, quote: Quote): Promise<any> 
   maxDate.setDate(maxDate.getDate() + 30);
   if (shipDate > maxDate) shipDate.setTime(maxDate.getTime());
 
-  const now = new Date();
-  if (shipDate <= now) {
-    shipDate.setDate(now.getDate());
-    shipDate.setHours(8, 0, 0, 0);
-    if (shipDate <= now) {
-      shipDate.setDate(now.getDate() + 1);
-      shipDate.setHours(8, 0, 0, 0);
-    }
+  const day = shipDate.getDay(); // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) {
+    throw new BadRequestException(
+      `Pickup date ${shipDate.toDateString()} falls on a ${day === 0 ? 'Sunday' : 'Saturday'}. XPO does not offer weekend pickup. Please select a weekday (Monday–Friday).`
+    );
   }
 
-  const pkupDateISO   = toXPOTime(shipDate);
-  const dockCloseDate = new Date(shipDate.getTime() + 4 * 60 * 60 * 1000);
-  const dockCloseISO  = toXPOTime(dockCloseDate);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const dateStr = `${shipDate.getFullYear()}-${pad(shipDate.getMonth() + 1)}-${pad(shipDate.getDate())}`;
+
+  const readyTime = parseTimeStr(fromAddress.palletShippingReadyTime, 9);
+  const closeTime = parseTimeStr(fromAddress.palletShippingCloseTime, 17);
+
+  const pkupDateISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00.000`;
+  const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00.000`;
 
   const [firstName, ...lastParts] = (fromAddress.contactName ?? 'Freight Shipper').split(' ');
   const lastName = lastParts.join(' ') || 'Shipper';
@@ -720,6 +736,7 @@ async createShipment(dto: CreateCarrierShipmentDTO, quote: Quote): Promise<any> 
     },
   };
 
+  console.dir(bolPayload, { depth: null })
 
   const bolUrl = `${this.baseUrl}/billoflading/1.0/billsoflading?testMode=${testMode}`;
   const bolResponse = await fetch(bolUrl, {
@@ -733,9 +750,10 @@ async createShipment(dto: CreateCarrierShipmentDTO, quote: Quote): Promise<any> 
   });
 
   const bolData = await bolResponse.json();
-
+console.log({bolData})
   const bolInstId = bolData.data?.bolInfo?.bolInstId;
   if (!bolResponse.ok || !bolInstId) {
+    console.dir(bolData.error.moreInfo, { depth: null})
     const errorMsg =
       bolData.error?.message ??
       bolData.errors?.[0]?.message ??
@@ -758,6 +776,7 @@ async createShipment(dto: CreateCarrierShipmentDTO, quote: Quote): Promise<any> 
       fullBolData = await getResponse.json();
     }
   } catch (err) {
+    console.dir(err, { depth: null })
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -789,6 +808,82 @@ async createShipment(dto: CreateCarrierShipmentDTO, quote: Quote): Promise<any> 
     pkupCallDate: bolData.data?.bolInfo?.pkupCallDate ?? null,
     pkupCallSeq:  bolData.data?.bolInfo?.pkupCallSeq ?? null,
     bolPdfBase64,
+  };
+}
+
+async cancelShipment(bolInstId: string): Promise<any> {
+  const token    = await this.getAuthToken();
+  const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
+
+  const url = `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/cancel?testMode=${testMode}`;
+
+  const response = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept:        'application/json',
+    },
+  });
+
+  const data = await response.json();
+  console.log('Cancel BOL Response:', JSON.stringify(data, null, 2));
+
+  if (!response.ok) {
+    const errorMsg =
+      data.error?.message ??
+      data.errors?.[0]?.message ??
+      'Unknown cancel error';
+    throw new BadRequestException(`XPO BOL cancel failed: ${errorMsg}`);
+  }
+
+  return {
+    success: true,
+    bolInstId,
+    raw: data,
+  };
+}
+
+
+async getStatusAndEvents(proNbr: string): Promise<{
+  statusCd: string | undefined;
+  events: any[];
+}> {
+  const token = await this.getAuthToken();
+  const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
+
+  const [statusRes, eventsRes] = await Promise.all([
+    fetch(
+      `${this.baseUrl}/tracking/1.0/shipments/shipment-status-details?referenceNumbers=${proNbr}`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
+    ),
+    fetch(
+      `${this.baseUrl}/tracking/1.0/shipments/${proNbr}/tracking-events?testMode=${testMode}&detailLevel=DETAIL`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
+    ),
+  ]);
+
+  const [statusData, eventsData] = await Promise.all([
+    statusRes.json(),
+    eventsRes.json(),
+  ]);
+
+  if (!statusRes.ok) {
+    const msg = statusData.error?.message ?? statusData.errors?.[0]?.message ?? 'Unknown error';
+    throw new BadRequestException(`XPO status failed: ${msg}`);
+  }
+  if (!eventsRes.ok) {
+    const msg = eventsData.error?.message ?? eventsData.errors?.[0]?.message ?? 'Unknown error';
+    throw new BadRequestException(`XPO events failed: ${msg}`);
+  }
+
+  const shipmentStatus = statusData.data?.shipmentStatusDtls?.[0];
+  if (!shipmentStatus) {
+    throw new NotFoundException(`No tracking found for PRO ${proNbr}`);
+  }
+
+  return {
+    statusCd: shipmentStatus.shipmentStatus?.statusCd,
+    events: (eventsData.data?.shipmentTrackingEvent ?? []).map((e: any) => e.eventHdr),
   };
 }
 // ── Helpers ───────────────────────────────────────────────────────────────

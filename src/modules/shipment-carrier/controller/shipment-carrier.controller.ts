@@ -10,6 +10,7 @@ import { RequestContextService } from "src/utils/request-context-service";
 import { RolesGuard } from "src/guards/roles.guard";
 import { Role } from "src/decorators/role.decorator";
 import { ROLES } from "src/common/constants/roles";
+import { ShipmentStatusDTO } from "../dto/get-shipment-status.dto";
 
 @Controller("shipment-carriers")
 export class ShipmentCarrierController {
@@ -90,5 +91,12 @@ export class ShipmentCarrierController {
     @Post('/webhook-events')
     async ManageWebhookEvents(@Body() dto: any) {
         return dto;
+    }
+
+    @UseGuards(SessionAuthGuard, RolesGuard)
+    @Role([ROLES.ADMIN, ROLES.USER])
+    @Post('track')
+    async trackShipment(@Body() dto: ShipmentStatusDTO) {
+    return this.shipmentCarrierService.trackShipment(dto);
     }
 }

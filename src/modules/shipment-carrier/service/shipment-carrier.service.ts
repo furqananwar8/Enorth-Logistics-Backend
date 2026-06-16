@@ -16,6 +16,8 @@ import { ENV } from "src/common/constants/env";
 import { PaymentService } from "src/modules/payment/service/payment.service";
 import { SessionData } from "express-session";
 import { RequestContextService } from "src/utils/request-context-service";
+import { ShipmentStatusDTO } from "../dto/get-shipment-status.dto";
+import { ShipmentStatus } from "src/common/enum/shipment-status";
 
 @Injectable()
 export class ShipmentCarrierService {
@@ -472,5 +474,86 @@ export class ShipmentCarrierService {
         const normalizedRates = this.xpoAdapter.mapXPOToCarrierRate(rates) as Record<string, any>;
         const chargesSetByAdmin = [ShipmentType.PACKAGE, ShipmentType.PALLET].includes(dto.shipmentType) ? companyBasedRates.LTLRate : companyBasedRates.FTLRate;
         return {...normalizedRates, chargesSetByAdmin, finalTotalWithAdminCut: Number(normalizedRates?.totalPrice as number + (chargesSetByAdmin ||0))};
+    }
+
+    async trackShipment(dto: ShipmentStatusDTO): Promise<any> {
+        // ── 1. Find shipment by ID and carrier ─────────────────────────────────
+        const shipment = await this.em.findOne(Shipment, {
+            id: dto.shipmentId,
+            carrier: dto.carrier,
+        });
+
+        if (!shipment) {
+            throw new NotFoundException(
+            `Shipment not found for ID ${dto.shipmentId} and carrier ${dto.carrier}`
+            );
+        }
+
+        // ── 2. Get tracking number / PRO ───────────────────────────────────────
+        const proNumber = shipment.trackingNumber;
+        if (!proNumber) {
+            throw new BadRequestException(
+            `No tracking number available for shipment ${dto.shipmentId}`
+            );
+        }
+
+        // ── 3. Call carrier-specific adapter ───────────────────────────────────
+        let status: any;
+        let events: any;
+
+        switch (dto.carrier) {
+            case Carrier.XPO: {
+                const { statusCd, events: trackingEvents } = await this.xpoAdapter.getStatusAndEvents(proNumber);
+                status = statusCd;
+                events = trackingEvents;
+            }
+            break;
+
+            // Add other carriers here:
+            // case Carrier.FEDEX:
+            //   [status, events] = await Promise.all([
+            //     this.fedexAdapter.getShipmentStatus(proNumber),
+            //     this.fedexAdapter.getTrackingEvents(proNumber),
+            //   ]);
+            //   break;
+
+            default:
+            throw new BadRequestException(`Tracking not supported for carrier: ${dto.carrier}`);
+        }
+
+        // ── 4. Update shipment status in DB ──────────────────────────────────────
+        if (status) {
+            shipment.currentStatus = this.mapCarrierStatusToInternal(dto.carrier, status);
+            shipment.lastTrackedAt = new Date();
+            await this.em.flush();
+        }
+
+        // ── 5. Return combined response ────────────────────────────────────────
+        return {
+            status: shipment.currentStatus,
+            events: events?.events ?? []
+        };
+    }
+
+    private mapCarrierStatusToInternal(carrier: Carrier, carrierStatusCd: string): ShipmentStatus {
+    if (carrier === Carrier.XPO) {
+        const map: Record<string, ShipmentStatus> = {
+        '1':  ShipmentStatus.PICKED_UP,
+        '8':  ShipmentStatus.OUT_FOR_DELIVERY,
+        '13': ShipmentStatus.APPOINTMENT_REQUIRED,
+        '17': ShipmentStatus.RETURNED_TO_DOCK,
+        '21': ShipmentStatus.REFUSED,
+        '23': ShipmentStatus.DELIVERED,
+        '26': ShipmentStatus.CANCELLED,
+        '29': ShipmentStatus.IN_TRANSIT,
+        '32': ShipmentStatus.CREATED,
+        '33': ShipmentStatus.DELAYED,
+        '37': ShipmentStatus.DELAYED,
+        };
+        return map[carrierStatusCd] ?? ShipmentStatus.UNKNOWN;
+    }
+
+    // Add other carrier mappings here
+    return ShipmentStatus.UNKNOWN;
     }
 }
