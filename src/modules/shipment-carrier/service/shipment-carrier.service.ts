@@ -18,6 +18,7 @@ import { SessionData } from "express-session";
 import { RequestContextService } from "src/utils/request-context-service";
 import { ShipmentStatusDTO } from "../dto/get-shipment-status.dto";
 import { ShipmentStatus } from "src/common/enum/shipment-status";
+import { MinimaxAdapter } from "../adapter/minimax.adapter";
 
 @Injectable()
 export class ShipmentCarrierService {
@@ -27,9 +28,10 @@ export class ShipmentCarrierService {
         private readonly tstAdapter: TSTCFExpressAdapter,
         private readonly tforceAdapter: TForceAdapter,
         private readonly xpoAdapter: XPOAdapter,
+        private readonly minimaxAdapter: MinimaxAdapter,
         private readonly mockTracking: MockCarrierTrackingService,
         private readonly paymentService: PaymentService,
-        private readonly requestContextService: RequestContextService
+        private readonly requestContextService: RequestContextService,
     ) {}
     
     async createShipment(dto: CreateCarrierShipmentDTO, session: SessionData) {
@@ -344,7 +346,8 @@ export class ShipmentCarrierService {
             tstResult, 
             fedexResult, 
             tforceResult,
-            xpoResult
+            xpoResult,
+            minimaxResult
         ] = await Promise.all([
             this.getTSTRates(dto, companyBasedRates)
                 .then(r => ({ success: true as const, data: r }))
@@ -358,7 +361,11 @@ export class ShipmentCarrierService {
             this.getXPORates(dto, companyBasedRates)
                 .then(r => ({ success: true as const, data: r }))
                 .catch(e => ({ success: false as const, error: e.message })),
+            this.getMinimaxRates(dto, companyBasedRates)
+                .then(r => ({ success: true as const, data: r }))
+                .catch(e => ({ success: false as const, error: e.message })),
         ]);
+
         return {
             message: "Rates fetched",
             fedexQuotes: fedexResult.success ? fedexResult.data : null,
@@ -369,6 +376,8 @@ export class ShipmentCarrierService {
             tforceError: tforceResult.success ? null : tforceResult.error,
             xpoQuotes: xpoResult.success ? xpoResult.data : null,
             xpoError: xpoResult.success ? null : xpoResult.error,
+            minimaxQuotes: minimaxResult.success ? minimaxResult.data : null,
+            minimaxError: minimaxResult.success ? null : minimaxResult.error,
         };
     }
 
@@ -378,7 +387,8 @@ export class ShipmentCarrierService {
             { name: Carrier.FEDEX,   fetch: () => this.getFedExRates(dto, companyBasedRates) },
             { name: Carrier.TST,     fetch: () => this.getTSTRates(dto, companyBasedRates) },
             { name: Carrier.TFORCE,  fetch: () => this.getTForceRates(dto, companyBasedRates) },
-            { name: Carrier.XPO, fetch: () => this.getXPORates(dto, companyBasedRates) }
+            { name: Carrier.XPO,     fetch: () => this.getXPORates(dto, companyBasedRates) },
+            { name: Carrier.MINIMAX, fetch: () => this.getMinimaxRates(dto, companyBasedRates) }
         ];
 
         const streams = carriers.map(c =>
@@ -474,6 +484,64 @@ export class ShipmentCarrierService {
         const normalizedRates = this.xpoAdapter.mapXPOToCarrierRate(rates) as Record<string, any>;
         const chargesSetByAdmin = [ShipmentType.PACKAGE, ShipmentType.PALLET].includes(dto.shipmentType) ? companyBasedRates.LTLRate : companyBasedRates.FTLRate;
         return {...normalizedRates, chargesSetByAdmin, finalTotalWithAdminCut: Number(normalizedRates?.totalPrice as number + (chargesSetByAdmin ||0))};
+    }
+
+   private async getMinimaxRates(dto: any, companyBasedRates: Record<string, any>) {
+        if ([ShipmentType.COURIER, ShipmentType.PACKAGE].includes(dto.shipmentType)) {
+            return null;
+        }
+
+        const fromAddress = dto.addresses?.find((a: any) => a.type === 'FROM')?.addressBookEntry;
+        const toAddress   = dto.addresses?.find((a: any) => a.type === 'TO')?.addressBookEntry;
+
+        const tailgateRequired = fromAddress?.tailgateRequired === true || toAddress?.tailgateRequired === true;
+        const residentialAddress = fromAddress?.isResidential === true || toAddress?.isResidential === true;
+
+        // Build Minimax accessorial codes from flags
+        const accessorialCodes: string[] = [];
+        if (tailgateRequired) accessorialCodes.push('TLGD');
+        if (residentialAddress) accessorialCodes.push('RESDEL');
+        const accessorials = accessorialCodes.length > 0 ? accessorialCodes.join(',') : undefined;
+
+        const minimaxDto = {
+            ...dto,
+            type: dto.shipmentType,
+            from: dto.minimax?.from || {
+                postalCode: dto.tst?.from?.postalCode || dto.tforce?.from?.postalCode || dto.xpo?.from?.postalCode,
+                city: dto.tst?.from?.city || dto.tforce?.from?.city || dto.xpo?.from?.city,
+                state: dto.tst?.from?.state || dto.tforce?.from?.state || dto.xpo?.from?.state,
+                countryCode: dto.tst?.from?.state ? 'CA' : (dto.tforce?.from?.countryCode || dto.xpo?.from?.countryCode || 'CA'),
+            },
+            to: dto.minimax?.to || {
+                postalCode: dto.tst?.to?.postalCode || dto.tforce?.to?.postalCode || dto.xpo?.to?.postalCode,
+                city: dto.tst?.to?.city || dto.tforce?.to?.city || dto.xpo?.to?.city,
+                state: dto.tst?.to?.state || dto.tforce?.to?.state || dto.xpo?.to?.state,
+                countryCode: dto.tst?.to?.state ? 'CA' : (dto.tforce?.to?.countryCode || dto.xpo?.to?.countryCode || 'CA'),
+            },
+            pallets: dto.packages || [],
+            dangerousGoods: dto.dangerousGoods || false,
+            accessorials,
+            shipDate: dto.shipDate,
+        };
+
+        const carrierPayload = this.minimaxAdapter.buildRequest(minimaxDto);
+        const normalizedResponse = await this.minimaxAdapter.fetchRates(carrierPayload) as any;
+
+        if (!normalizedResponse || normalizedResponse.total === 0) {
+            return null;
+        }
+
+        const mappedRate = this.minimaxAdapter.mapMinimaxToCarrierRate(normalizedResponse);
+
+        const chargesSetByAdmin = [ShipmentType.PACKAGE, ShipmentType.PALLET].includes(dto.shipmentType) 
+            ? companyBasedRates.LTLRate 
+            : companyBasedRates.FTLRate;
+
+        return {
+            ...mappedRate,
+            chargesSetByAdmin,
+            finalTotalWithAdminCut: Number(mappedRate?.totalPrice + (chargesSetByAdmin || 0)),
+        };
     }
 
     async trackShipment(dto: ShipmentStatusDTO): Promise<any> {

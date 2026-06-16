@@ -6,7 +6,8 @@ export enum Carrier {
   FEDEX = 'FEDEX',
   TST = 'TST',
   TFORCE = 'TFORCE',
-  XPO = 'XPO'
+  XPO = 'XPO',
+  MINIMAX = 'minimax'
 }
 
 class SelectedRateDto {

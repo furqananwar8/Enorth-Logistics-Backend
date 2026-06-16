@@ -11,6 +11,7 @@ import { MockCarrierTrackingService } from "../mock-carrier-tracking/service/moc
 import { BullModule } from "@nestjs/bullmq";
 import { PaymentModule } from "../payment/payment.module";
 import { RequestContextService } from "src/utils/request-context-service";
+import { MinimaxAdapter } from "./adapter/minimax.adapter";
 
 @Module({
     imports: [
@@ -60,6 +61,14 @@ import { RequestContextService } from "src/utils/request-context-service";
                 accountNumber: getEnv(ENV.XPO_ACCOUNT_NUMBER!),
                 username: getEnv(ENV.XPO_USERNAME),
                 password: getEnv(ENV.XPO_PASSWORD)
+            }),
+        },
+        {
+            provide: MinimaxAdapter,
+            useFactory: () => new MinimaxAdapter({
+                baseUrl: getEnv(ENV.MINIMAX_BASE_URL)!,
+                username: getEnv(ENV.MINIMAX_USERNAME)!,
+                password: getEnv(ENV.MINIMAX_PASSWORD)!,
             }),
         },
     ],

@@ -140,6 +140,24 @@ class TForceLocationDTO {
   isResidential?: boolean;
 }
 
+// ─── Minimax Location ──────────────────────────────
+class MinimaxLocationDTO {
+  @IsString()
+  postalCode!: string;
+
+  @IsOptional()
+  @IsString()
+  city?: string;
+
+  @IsOptional()
+  @IsString()
+  state?: string;
+
+  @IsOptional()
+  @IsEnum(CountryCode)
+  countryCode?: CountryCode = CountryCode.CA;
+}
+
 // ─── FedEx Section ─────────────────────────────────
 
 class FedExDTO {
@@ -184,6 +202,17 @@ class TforceDTO {
   to!: TForceLocationDTO;
 }
 
+// ─── Minimax Section ───────────────────────────────
+class MinimaxDTO {
+  @ValidateNested()
+  @Type(() => MinimaxLocationDTO)
+  from!: MinimaxLocationDTO;
+
+  @ValidateNested()
+  @Type(() => MinimaxLocationDTO)
+  to!: MinimaxLocationDTO;
+}
+
 // ─── Package ───────────────────────────────────────
 
 class PackageDTO {
@@ -199,22 +228,18 @@ class PackageDTO {
 
   @IsOptional()
   @IsNumber()
-
   length?: number;
 
   @IsOptional()
   @IsNumber()
-
   width?: number;
 
   @IsOptional()
   @IsNumber()
-
   height?: number;
 
   @IsOptional()
   @IsNumber()
-
   handlingUnits!: number;
 
   @IsOptional()
@@ -250,6 +275,11 @@ export class ShipmentRatesStreamDTO {
   @ValidateNested()
   @Type(() => TforceDTO)
   tforce?: TforceDTO;
+
+  @IsObject()
+  @ValidateNested()
+  @Type(() => MinimaxDTO)
+  minimax?: MinimaxDTO;
 
   @IsEnum(PickupType)
   pickupType!: PickupType;

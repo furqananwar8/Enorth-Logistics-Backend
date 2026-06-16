@@ -24,7 +24,7 @@ export class QuoteController{
         return this.quoteService.getAllAgainstCurrentUserCompany(session, params);
     }
 
-     @Get('/favorites')
+    @Get('/favorites')
     async getAllFavoritesAgainstCurrentUser(
         @Session() session: SessionData,
         @Query() params: PaginationParams
