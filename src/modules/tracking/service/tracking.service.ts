@@ -28,12 +28,12 @@ export class TrackingService {
 
         let filter: Record<string, any> = {};
 
-        
         if (session.role !== ROLES.SUPER_ADMIN) {
             filter["company"] = this.em.getReference(Company, session.companyId as number);
         }
 
-        filter["shipment.carrier"] = { $ne: null };
+        // Use $exists subquery for shipment.carrier check - works with count()
+        filter["shipment"] = { $exists: true };
 
         if (params?.status) {
             const normalized = params.status.toUpperCase();
@@ -74,19 +74,22 @@ export class TrackingService {
             };
         }
 
+        // Merge all shipment filters into a single object to prevent overwriting
+        const shipmentFilter: Record<string, any> = { ...filter["shipment"] };
+
         if (params.carrier) {
-            filter["shipment"] = { ...filter["shipment"], carrier: params.carrier };
+            shipmentFilter["carrier"] = params.carrier;
         }
 
-
         if (params.shipDateFrom || params.shipDateTo) {
-            filter["shipment"] = {
-                ...filter["shipment"],
-                shipDate: {
-                    ...(params.shipDateFrom && { $gte: startOfDay(params.shipDateFrom) }),
-                    ...(params.shipDateTo   && { $lte: endOfDay(params.shipDateTo) }),
-                },
+            shipmentFilter["shipDate"] = {
+                ...(params.shipDateFrom && { $gte: startOfDay(params.shipDateFrom) }),
+                ...(params.shipDateTo   && { $lte: endOfDay(params.shipDateTo) }),
             };
+        }
+
+        if (Object.keys(shipmentFilter).length > 0) {
+            filter["shipment"] = shipmentFilter;
         }
 
         if (params.originPostalCode) {
@@ -118,17 +121,12 @@ export class TrackingService {
 
         const orderByArr = Object.entries(orderBy).map(([field, dir]) => ({ [field]: dir }));
 
-        const total = await this.em.count(Quote, filter);   // keep separate only if you
-        const totalPages = Math.ceil(total / limit) || 1;   // need exact total; otherwise
-        const clampedPage = Math.min(page, totalPages);     // use findAndCount() below ↓
-        const offset = (clampedPage - 1) * limit;
-
-        const quotes = await this.em.find(Quote, filter, {
+    // Use findAndCount instead of separate count() + find()
+    const [quotes, total] = await this.em.findAndCount(Quote, filter, {
         limit,
-        offset,
+        offset: (page - 1) * limit,
         orderBy: orderByArr,
 
-        // Only join what's actually needed
         populate: [
             "shipment",
             "lineItems",
@@ -196,18 +194,21 @@ export class TrackingService {
         ],
     });
 
-        return {
-            message: "Trackings retrieved successfully",
-            data: quotes,
-            meta: {
-                total,
-                page,
-                limit,
-                totalPages,
-                hasNextPage: clampedPage < totalPages,
-                hasPrevPage: clampedPage > 1,
-                sort: orderBy,
-            },
-        };
-    }
+    const totalPages = Math.ceil(total / limit) || 1;
+    const clampedPage = Math.min(page, totalPages);
+
+    return {
+        message: "Trackings retrieved successfully",
+        data: quotes,
+        meta: {
+            total,
+            page: clampedPage,
+            limit,
+            totalPages,
+            hasNextPage: clampedPage < totalPages,
+            hasPrevPage: clampedPage > 1,
+            sort: orderBy,
+        },
+    };
+}
 }
