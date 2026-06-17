@@ -889,7 +889,6 @@ export class TForceAdapter implements CarrierAdapter {
         ],
       },
     };
-    console.dir(payload, { depth: null });
     // ── Call the Shipping API ─────────────────────────────────────────────────
     // Note: shipping uses a different base URL than rating
     const shippingBaseUrl = 'https://api.tforcefreight.com/shipping';

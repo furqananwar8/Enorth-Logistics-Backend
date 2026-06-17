@@ -19,6 +19,7 @@ import { RequestContextService } from "src/utils/request-context-service";
 import { ShipmentStatusDTO } from "../dto/get-shipment-status.dto";
 import { ShipmentStatus } from "src/common/enum/shipment-status";
 import { MinimaxAdapter } from "../adapter/minimax.adapter";
+import { PolarisAdapter } from "../adapter/polaris.adapter";
 
 @Injectable()
 export class ShipmentCarrierService {
@@ -29,6 +30,7 @@ export class ShipmentCarrierService {
         private readonly tforceAdapter: TForceAdapter,
         private readonly xpoAdapter: XPOAdapter,
         private readonly minimaxAdapter: MinimaxAdapter,
+        private readonly polarisAdapter: PolarisAdapter,
         private readonly mockTracking: MockCarrierTrackingService,
         private readonly paymentService: PaymentService,
         private readonly requestContextService: RequestContextService,
@@ -37,7 +39,7 @@ export class ShipmentCarrierService {
     async createShipment(dto: CreateCarrierShipmentDTO, session: SessionData) {
         let carrierResponse: any;
 
-        if (![Carrier.FEDEX, Carrier.TST, Carrier.TFORCE, Carrier.XPO].includes(dto.carrier)) {
+        if (![Carrier.FEDEX, Carrier.TST, Carrier.TFORCE, Carrier.XPO, Carrier.MINIMAX].includes(dto.carrier)) {
             throw new BadRequestException("This carrier hasn't been implemented for shipment");
         }
 
@@ -299,6 +301,81 @@ export class ShipmentCarrierService {
             }
         }
 
+        if (dto.carrier === Carrier.MINIMAX) {
+            // ═══════════════════════════════════════════════════════════════════════
+            // 1. CREATE BOL + PICKUP (single call)
+            // ═══════════════════════════════════════════════════════════════════════
+            const addresses = await quote.addresses.loadItems();
+            const fromAddrBook = addresses.find((a: any) => a.type === 'FROM')?.addressBookEntry;
+            const toAddrBook   = addresses.find((a: any) => a.type === 'TO')?.addressBookEntry;
+
+            // Build accessorials from address flags
+            const accessorialCodes: string[] = [];
+            if (shipment?.tailgateRequiredInFromAddress || shipment.tailgateRequiredInToAddress) accessorialCodes.push('TLGD');
+            if (fromAddrBook?.isResidential) accessorialCodes.push('RESP');  // residential pickup
+            if (toAddrBook?.isResidential) accessorialCodes.push('RESDEL');  // residential delivery
+
+            const carrierResponse = await this.minimaxAdapter.createShipment({
+                shipDate: dto.shipDate ? new Date(dto.shipDate) : new Date(),
+                fromAddress: fromAddrBook,
+                toAddress: toAddrBook,
+                lineItems: (quote as any).lineItems.units,
+                accessorials: accessorialCodes.length > 0 ? accessorialCodes.join(',') : undefined,
+                pucontact: fromAddrBook?.contactName,
+                puphone: fromAddrBook?.phoneNumber,
+                // billref: getEnv(ENV.MINIMAX_ACCOUNT_NUMBER),
+                puemail: fromAddrBook?.email,
+                putime: fromAddrBook?.palletShippingReadyTime,
+                closetime: fromAddrBook?.palletShippingCloseTime,
+            });
+
+            const proNumber = carrierResponse.proNumber;
+            if (!proNumber) {
+                throw new BadRequestException('Minimax BOL creation failed: No PRO number returned');
+            }
+
+            // ═══════════════════════════════════════════════════════════════════════
+            // 2. USE DTO SELECTED RATE
+            // ═══════════════════════════════════════════════════════════════════════
+            const selectedRate = dto.selectedRate ?? {};
+            const rateTotal = selectedRate.totalCharge ?? 0;
+
+            shipment.bolNumber       = carrierResponse.quoteNumber || proNumber;
+            shipment.carrierQuoteId  = carrierResponse.quoteNumber || proNumber;
+            shipment.trackingNumber  = proNumber;
+            shipment.serviceName     = selectedRate.serviceName ?? 'Minimax Express LTL';
+            shipment.serviceType     = selectedRate.serviceType ?? 'LTL';
+            shipment.shipDate        = dto.shipDate ? new Date(dto.shipDate) : new Date();
+            shipment.currency        = selectedRate.currency ?? 'CAD';
+            shipment.totalBaseCharge = rateTotal;
+            shipment.totalNetCharge  = rateTotal;
+            shipment.totalCharge     = rateTotal;
+            shipment.carrier         = Carrier.MINIMAX;
+
+            // BOL PDF link if available
+            shipment.shippingLabels = carrierResponse.bolLink ?? null;
+
+            // Surcharges from selectedRate
+            const quoteSurcharges = selectedRate.surcharges ?? [];
+            if (quoteSurcharges.length > 0) {
+                const surchargeEntities = quoteSurcharges
+                    .filter((s: any) => (s.value ?? 0) > 0)
+                    .map((s: any) =>
+                        this.em.create(Surcharge, {
+                            shipment,
+                            carrier: Carrier.MINIMAX,
+                            name: s.name || s.code || 'Surcharge',
+                            amount: s.value,
+                            currency: s.currency || 'CAD',
+                            createdAt: new Date(),
+                        })
+                    );
+                if (surchargeEntities.length > 0) {
+                    shipment.surcharges.add(surchargeEntities);
+                }
+            }
+        }
+
         shipment.tailgateRequiredInFromAddress = dto.tailgatePickup  ?? false;
         shipment.tailgateRequiredInToAddress   = dto.tailgateDelivery ?? false;
         shipment.carrier  = dto.carrier;
@@ -347,7 +424,8 @@ export class ShipmentCarrierService {
             fedexResult, 
             tforceResult,
             xpoResult,
-            minimaxResult
+            minimaxResult,
+            polarisResult
         ] = await Promise.all([
             this.getTSTRates(dto, companyBasedRates)
                 .then(r => ({ success: true as const, data: r }))
@@ -364,6 +442,14 @@ export class ShipmentCarrierService {
             this.getMinimaxRates(dto, companyBasedRates)
                 .then(r => ({ success: true as const, data: r }))
                 .catch(e => ({ success: false as const, error: e.message })),
+            this.getPolarisRates(dto, companyBasedRates)
+                .then(r => ({ success: true as const, data: r }))
+                .catch(e => 
+                {
+                    console.log(e)
+                    return  ({ success: false as const, error: e.message })
+                }
+                ),
         ]);
 
         return {
@@ -378,6 +464,8 @@ export class ShipmentCarrierService {
             xpoError: xpoResult.success ? null : xpoResult.error,
             minimaxQuotes: minimaxResult.success ? minimaxResult.data : null,
             minimaxError: minimaxResult.success ? null : minimaxResult.error,
+            polarisQuotes: polarisResult.success ? polarisResult.data : null,
+            polarisError: polarisResult.success ? null : polarisResult.error,
         };
     }
 
@@ -388,7 +476,8 @@ export class ShipmentCarrierService {
             { name: Carrier.TST,     fetch: () => this.getTSTRates(dto, companyBasedRates) },
             { name: Carrier.TFORCE,  fetch: () => this.getTForceRates(dto, companyBasedRates) },
             { name: Carrier.XPO,     fetch: () => this.getXPORates(dto, companyBasedRates) },
-            { name: Carrier.MINIMAX, fetch: () => this.getMinimaxRates(dto, companyBasedRates) }
+            { name: Carrier.MINIMAX, fetch: () => this.getMinimaxRates(dto, companyBasedRates) },
+            { name: Carrier.POLARIS, fetch: () => this.getPolarisRates(dto, companyBasedRates) },
         ];
 
         const streams = carriers.map(c =>
@@ -460,7 +549,6 @@ export class ShipmentCarrierService {
         };
 
         const rates = await this.tforceAdapter.getRates(tforceDto);
-        console.dir({rates}, { depth: null})
         let normalizedRates = this.tforceAdapter.mapTForceToCarrierRate(rates) as any;
         
         if(Array.isArray(normalizedRates)) normalizedRates = normalizedRates[0]
@@ -486,7 +574,7 @@ export class ShipmentCarrierService {
         return {...normalizedRates, chargesSetByAdmin, finalTotalWithAdminCut: Number(normalizedRates?.totalPrice as number + (chargesSetByAdmin ||0))};
     }
 
-   private async getMinimaxRates(dto: any, companyBasedRates: Record<string, any>) {
+    private async getMinimaxRates(dto: any, companyBasedRates: Record<string, any>) {
         if ([ShipmentType.COURIER, ShipmentType.PACKAGE].includes(dto.shipmentType)) {
             return null;
         }
@@ -544,6 +632,52 @@ export class ShipmentCarrierService {
         };
     }
 
+    private async getPolarisRates(dto: any, companyBasedRates: Record<string, any>) {
+        const fromCountry = dto.polaris.from.countryCode;
+        const toCountry = dto.polaris.to.countryCode;
+        const domesticShipping = fromCountry === toCountry;
+        // Polaris only does cross-border
+        if (domesticShipping) {
+            throw new BadRequestException(
+                `Polaris only supports cross-border shipping (US ↔ Canada). Both addresses appear to be in ${fromCountry}.`
+            );
+        }
+
+        if ([ShipmentType.COURIER, ShipmentType.PACKAGE].includes(dto.shipmentType)) {
+            return null;
+        }
+
+        const polarisDto = {
+            ...dto,
+            type: dto.shipmentType,
+            from: dto.polaris?.from,
+            to: dto.polaris?.to,
+            pallets: dto.packages || dto.pallets || [],
+            services: dto.services || {},
+            shipDate: dto.shipDate,
+            freightClass: dto.packages?.[0]?.freightClass || '',
+        };
+        const carrierPayload = this.polarisAdapter.buildRequest(polarisDto);
+        
+        const normalizedResponse = await this.polarisAdapter.fetchRates(carrierPayload) as any;
+        if (!normalizedResponse || normalizedResponse.error || normalizedResponse.totalCharge === 0) {
+            return null;
+        }
+
+        const mappedRate = this.polarisAdapter.mapPolarisToCarrierRate(normalizedResponse);
+        
+        const chargesSetByAdmin = [ShipmentType.PACKAGE, ShipmentType.PALLET].includes(dto.shipmentType) 
+            ? companyBasedRates.LTLRate 
+            : companyBasedRates.FTLRate;
+
+        return {
+            ...mappedRate,
+            chargesSetByAdmin,
+            finalTotalWithAdminCut: Number(mappedRate?.totalPrice + (chargesSetByAdmin || 0)),
+        };
+    }
+
+
     async trackShipment(dto: ShipmentStatusDTO): Promise<any> {
         // ── 1. Find shipment by ID and carrier ─────────────────────────────────
         const shipment = await this.em.findOne(Shipment, {
@@ -572,11 +706,17 @@ export class ShipmentCarrierService {
         switch (dto.carrier) {
             case Carrier.XPO: {
                 const { statusCd, events: trackingEvents } = await this.xpoAdapter.getStatusAndEvents(proNumber);
+                status = this.mapCarrierStatusToInternal(dto.carrier, statusCd || '');
+                events = trackingEvents ?? (trackingEvents as any)?.events ?? [];
+            }
+            break;
+
+            case Carrier.MINIMAX: {
+                const { statusCd, events: trackingEvents } = await this.minimaxAdapter.getStatusAndEvents(proNumber);
                 status = statusCd;
                 events = trackingEvents;
             }
             break;
-
             // Add other carriers here:
             // case Carrier.FEDEX:
             //   [status, events] = await Promise.all([
@@ -591,7 +731,7 @@ export class ShipmentCarrierService {
 
         // ── 4. Update shipment status in DB ──────────────────────────────────────
         if (status) {
-            shipment.currentStatus = this.mapCarrierStatusToInternal(dto.carrier, status);
+            shipment.currentStatus = status;
             shipment.lastTrackedAt = new Date();
             await this.em.flush();
         }
@@ -599,7 +739,7 @@ export class ShipmentCarrierService {
         // ── 5. Return combined response ────────────────────────────────────────
         return {
             status: shipment.currentStatus,
-            events: events?.events ?? []
+            events: events ?? []
         };
     }
 

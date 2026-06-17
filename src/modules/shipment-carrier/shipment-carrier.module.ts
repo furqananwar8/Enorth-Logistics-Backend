@@ -12,6 +12,7 @@ import { BullModule } from "@nestjs/bullmq";
 import { PaymentModule } from "../payment/payment.module";
 import { RequestContextService } from "src/utils/request-context-service";
 import { MinimaxAdapter } from "./adapter/minimax.adapter";
+import { PolarisAdapter } from "./adapter/polaris.adapter";
 
 @Module({
     imports: [
@@ -69,6 +70,13 @@ import { MinimaxAdapter } from "./adapter/minimax.adapter";
                 baseUrl: getEnv(ENV.MINIMAX_BASE_URL)!,
                 username: getEnv(ENV.MINIMAX_USERNAME)!,
                 password: getEnv(ENV.MINIMAX_PASSWORD)!,
+            }),
+        },
+        {
+            provide: PolarisAdapter,
+            useFactory: () => new PolarisAdapter({
+                baseUrl: getEnv(ENV.POLARIS_BASE_URL)!,
+                apiKey: getEnv(ENV.POLARIS_API_KEY)!,
             }),
         },
     ],

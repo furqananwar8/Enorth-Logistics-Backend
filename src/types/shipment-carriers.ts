@@ -3,7 +3,7 @@ import { ShipmentType } from "src/common/enum/shipment-type.enum";
 import { Pallet } from "src/entities/pallet.entity";
 
 
-export type Carrier = 'FEDEX' | 'UPS' | 'TFORCE';
+export type Carrier = 'FEDEX' | 'UPS' | 'TFORCE' | 'MINIMAX';
 
 export interface CarrierShipment {
   shipmentType: ShipmentType;

@@ -158,6 +158,33 @@ class MinimaxLocationDTO {
   countryCode?: CountryCode = CountryCode.CA;
 }
 
+// ─── Polaris Location ──────────────────────────────
+class PolarisLocationDTO {
+  @IsString()
+  postalCode!: string;
+
+  @IsOptional()
+  @IsString()
+  city?: string;
+
+  @IsOptional()
+  @IsString()
+  state?: string;
+
+  @IsOptional()
+  @IsEnum(CountryCode)
+  countryCode?: CountryCode = CountryCode.CA;
+
+  @IsOptional()
+  @IsBoolean()
+  residentialPickup?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  residentialDelivery?: boolean;
+
+}
+
 // ─── FedEx Section ─────────────────────────────────
 
 class FedExDTO {
@@ -213,6 +240,17 @@ class MinimaxDTO {
   to!: MinimaxLocationDTO;
 }
 
+
+// ─── Minimax Section ───────────────────────────────
+class PolarisDTO {
+  @ValidateNested()
+  @Type(() => PolarisLocationDTO)
+  from!: PolarisLocationDTO;
+
+  @ValidateNested()
+  @Type(() => PolarisLocationDTO)
+  to!: PolarisLocationDTO;
+}
 // ─── Package ───────────────────────────────────────
 
 class PackageDTO {
@@ -281,6 +319,11 @@ export class ShipmentRatesStreamDTO {
   @Type(() => MinimaxDTO)
   minimax?: MinimaxDTO;
 
+  @IsObject()
+  @ValidateNested()
+  @Type(() => PolarisDTO)
+  polaris?: PolarisDTO;
+
   @IsEnum(PickupType)
   pickupType!: PickupType;
 
@@ -295,6 +338,10 @@ export class ShipmentRatesStreamDTO {
   @ArrayMinSize(1)
   packages!: PackageDTO[];
 
+  @IsOptional()
+  @IsObject()
+  services?: Record<string, any>;
+  
   @IsBoolean()
   stackable?: boolean;
 }
