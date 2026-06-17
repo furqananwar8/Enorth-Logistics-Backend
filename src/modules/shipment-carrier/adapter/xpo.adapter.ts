@@ -452,7 +452,7 @@ export class XPOAdapter implements CarrierAdapter {
  async fetchRates(carrierPayload: unknown): Promise<unknown> {
     const token = await this.getAuthToken();
     
-    const url = `${this.baseUrl}/rating/1.0/ratequotes`;
+    const url = `${this.baseUrl}/rating/1.0/ratequotes?showSpecialServiceCharges=true`;
     
     try {
         const response = await fetch(url, {

@@ -278,11 +278,13 @@ export class MinimaxAdapter implements CarrierAdapter {
       throw new BadRequestException('Minimax rate quote requires origin and destination postal codes');
     }
 
-    // Map services flags to accessorial codes
+    // Map services flags to Minimax accessorial codes
     const accessorialMap: Record<string, string> = {
-      residentialDelivery: 'RESDEL',
-      protectFromFreeze: 'PFFF',
-      tailgate: 'TLGD',
+      residentialPickup: 'PHP',
+      residentialDelivery: 'PHD',
+      protectFromFreeze: 'HTG',
+      tailgatePickup: 'TLGP',
+      tailgateDelivery: 'TLGD',
     };
 
     const accessorials = Object.entries(req.services || {})
@@ -321,7 +323,7 @@ export class MinimaxAdapter implements CarrierAdapter {
       vdzip: toZip,
       lines,
       ...(shipdate ? { shipdate } : {}),
-      ...(accessorials ? { accessorials } : {}),
+      // ...(accessorials ? { accessorials } : {}),
       vbterms: 'P',
     };
 
@@ -439,6 +441,7 @@ export class MinimaxAdapter implements CarrierAdapter {
     declval?: number;
     codamt?: number;
     nopickup?: boolean;
+    services?: Record<string, boolean>;  // <-- ADD THIS if you want typed services
   }): Promise<MinimaxBOLResponse> {
     const payload = this.buildBOLPayload(dto);
     const url = `${this.credentials.baseUrl}/tbolentry4.xml`;
@@ -535,7 +538,7 @@ export class MinimaxAdapter implements CarrierAdapter {
 
     if (params.shipdate) search.set('shipdate', params.shipdate);
     if (params.vbterms) search.set('vbterms', params.vbterms);
-    if (params.accessorials) search.set('accessorials', params.accessorials);
+    // if (params.accessorials) search.set('accessorials', params.accessorials);
 
     for (const line of params.lines) {
       const n = line.lineNumber;
@@ -565,6 +568,29 @@ export class MinimaxAdapter implements CarrierAdapter {
       }
       return cleaned.replace(/:/g, '').padStart(4, '0').slice(0, 4);
     };
+
+    // Map service flags to Minimax accessorial codes
+    const accessorialMap: Record<string, string> = {
+      residentialPickup: 'PHP',
+      residentialDelivery: 'PHD',
+      protectFromFreeze: 'HTG',
+      tailgatePickup: 'TLGP',
+      tailgateDelivery: 'TLGD',
+    };
+
+    // Build accessorial list from dto.services or dto.accessorials
+    // let accessoriallist = '';
+    // if (dto.services) {
+    //   const codes = Object.entries(dto.services)
+    //     .filter(([_, v]) => v === true)
+    //     .map(([k]) => accessorialMap[k])
+    //     .filter(Boolean);
+    //   accessoriallist = codes.join(',');
+    // } else if (dto.accessorials) {
+    //   // If accessorials is already a comma-separated string, pass through
+    //   // (but ideally you should map them too)
+    //   accessoriallist = dto.accessorials;
+    // }
 
     const payload: Record<string, string> = {
       shipname: fromAddr?.companyName || fromAddr?.name || 'Shipper',
@@ -601,7 +627,7 @@ export class MinimaxAdapter implements CarrierAdapter {
       closetime: formatTime(dto.closetime || fromAddr?.palletShippingCloseTime),
       ...(dto.punotes ? { punotes: dto.punotes } : {}),
       ...(dto.spcinstr ? { spcinstr: dto.spcinstr } : {}),
-      ...(dto.accessorials ? { accessoriallist: dto.accessorials } : {}),
+      // ...(accessoriallist ? { accessoriallist } : {}),
       ...(dto.pono ? { pono: dto.pono } : {}),
       ...(dto.bolno ? { bolno: dto.bolno } : {}),
       ...(dto.billref ? { billref: dto.billref } : {}),
