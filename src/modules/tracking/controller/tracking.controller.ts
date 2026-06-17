@@ -14,7 +14,7 @@ export class TrackingController {
     ) {}
 
     @UseGuards(SessionAuthGuard, RolesGuard)
-    @Role([ROLES.ADMIN, ROLES.USER])
+    @Role([ROLES.ADMIN, ROLES.USER, ROLES.SUPER_ADMIN, ROLES.STAFF])
     @Get("/")
     async GetAllTrackingsAgainstCurrentUserCompany(@Query() queryParams: any, @Session() session: SessionData) {
         return this.trackingService.getAllTrackingsAgainstCurrentUserCompany(session, queryParams)

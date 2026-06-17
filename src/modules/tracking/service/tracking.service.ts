@@ -5,6 +5,7 @@ import { ROLES } from "src/common/constants/roles";
 import { QuoteStatus } from "src/common/enum/quote-status";
 import { Company } from "src/entities/company.entity";
 import { Quote } from "src/entities/quote.entity";
+import { Shipment } from "src/entities/shipment.entity";
 import { PaginationParams } from "src/types/pagination";
 import { buildQuery } from "src/utils/api-query";
 import { startOfDay, endOfDay } from "src/utils/dates";
@@ -14,114 +15,117 @@ export class TrackingService {
     constructor(private readonly em: EntityManager) {}
 
     async getAllTrackingsAgainstCurrentUserCompany(session: SessionData, params: PaginationParams) {
-        const allowedFields = {
-            quoteNumber: "quoteNumber",
-            shipmentType: "shipmentType",
-            status: "status",
-            createdAt: "createdAt",
-            trackingNumber: "shipment.trackingNumber",
-            shipDate: "shipment.shipDate",
-            carrier: "shipment.carrier",
-        };
+    const allowedFields = {
+        quoteNumber: "quoteNumber",
+        shipmentType: "shipmentType",
+        status: "status",
+        createdAt: "createdAt",
+        trackingNumber: "shipment.trackingNumber",
+        shipDate: "shipment.shipDate",
+        carrier: "shipment.carrier",
+    };
 
-        const { search, page, limit, orderBy } = buildQuery(params, allowedFields);
+    const { search, page, limit, orderBy } = buildQuery(params, allowedFields);
 
-        let filter: Record<string, any> = {};
+    let filter: Record<string, any> = {};
 
-        if (session.role !== ROLES.SUPER_ADMIN) {
-            filter["company"] = this.em.getReference(Company, session.companyId as number);
+    if (session.role !== ROLES.SUPER_ADMIN) {
+        filter["company"] = this.em.getReference(Company, session.companyId as number);
+    }
+
+    // Only quotes that have a shipment with carrier set (not null)
+    const shipmentRows = await this.em.getConnection().execute(
+    'SELECT quote_id FROM shipment WHERE carrier IS NOT NULL'
+    );
+    const quoteIds = shipmentRows.map((row: any) => row.quote_id);
+    filter["id"] = { $in: quoteIds };  // ← actual array of numbers
+
+    if (params?.status) {
+        const normalized = params.status.toUpperCase();
+        const validStatuses = Object.values(QuoteStatus);
+        if (!validStatuses.includes(normalized as QuoteStatus)) {
+            throw new BadRequestException(
+                `Invalid status '${params.status}'. Allowed: ${validStatuses.join(', ')}`
+            );
         }
+        filter["status"] = normalized;
+    }
 
-        // Use $exists subquery for shipment.carrier check - works with count()
-        filter["shipment"] = { $exists: true };
+    if (search) {
+        filter["$or"] = [
+            { shipment: { trackingNumber: { $ilike: `%${search}%` } } },
 
-        if (params?.status) {
-            const normalized = params.status.toUpperCase();
-            const validStatuses = Object.values(QuoteStatus);
-            if (!validStatuses.includes(normalized as QuoteStatus)) {
-                throw new BadRequestException(
-                    `Invalid status '${params.status}'. Allowed: ${validStatuses.join(', ')}`
-                );
-            }
-            filter["status"] = normalized;
-        }
+            { addresses: { $some: { addressBookEntry: { address: { address1: { $ilike: `%${search}%` } } } } } },
+            { addresses: { $some: { addressBookEntry: { address: { address2: { $ilike: `%${search}%` } } } } } },
+            { addresses: { $some: { address: { address1: { $ilike: `%${search}%` } } } } },
+            { addresses: { $some: { address: { address2: { $ilike: `%${search}%` } } } } },
 
-        if (search) {
-            filter["$or"] = [
-                { shipment: { trackingNumber: { $ilike: `%${search}%` } } },
-
-                { addresses: { $some: { addressBookEntry: { address: { address1: { $ilike: `%${search}%` } } } } } },
-                { addresses: { $some: { addressBookEntry: { address: { address2: { $ilike: `%${search}%` } } } } } },
-                { addresses: { $some: { address: { address1: { $ilike: `%${search}%` } } } } },
-                { addresses: { $some: { address: { address2: { $ilike: `%${search}%` } } } } },
-
-                {
-                    shipment: {
-                        billingReferences: {
-                            $some: { code: { $ilike: `%${search}%` } },
-                        },
+            {
+                shipment: {
+                    billingReferences: {
+                        $some: { code: { $ilike: `%${search}%` } },
                     },
                 },
-            ];
-        }
+            },
+        ];
+    }
 
-        if (params.shipmentType) filter["shipmentType"] = params.shipmentType;
+    if (params.shipmentType) filter["shipmentType"] = params.shipmentType;
 
-        if (params.dateFrom || params.dateTo) {
-            filter["createdAt"] = {
-                ...(params.dateFrom && { $gte: startOfDay(params.dateFrom) }),
-                ...(params.dateTo   && { $lte: endOfDay(params.dateTo) }),
-            };
-        }
+    if (params.dateFrom || params.dateTo) {
+        filter["createdAt"] = {
+            ...(params.dateFrom && { $gte: startOfDay(params.dateFrom) }),
+            ...(params.dateTo   && { $lte: endOfDay(params.dateTo) }),
+        };
+    }
 
-        // Merge all shipment filters into a single object to prevent overwriting
-        const shipmentFilter: Record<string, any> = { ...filter["shipment"] };
+    // Merge all shipment filters into a single object to prevent overwriting
+    const shipmentFilter: Record<string, any> = {};
 
-        if (params.carrier) {
-            shipmentFilter["carrier"] = params.carrier;
-        }
+    if (params.carrier) {
+        shipmentFilter["carrier"] = params.carrier;
+    }
 
-        if (params.shipDateFrom || params.shipDateTo) {
-            shipmentFilter["shipDate"] = {
-                ...(params.shipDateFrom && { $gte: startOfDay(params.shipDateFrom) }),
-                ...(params.shipDateTo   && { $lte: endOfDay(params.shipDateTo) }),
-            };
-        }
+    if (params.shipDateFrom || params.shipDateTo) {
+        shipmentFilter["shipDate"] = {
+            ...(params.shipDateFrom && { $gte: startOfDay(params.shipDateFrom) }),
+            ...(params.shipDateTo   && { $lte: endOfDay(params.shipDateTo) }),
+        };
+    }
 
-        if (Object.keys(shipmentFilter).length > 0) {
-            filter["shipment"] = shipmentFilter;
-        }
+    if (Object.keys(shipmentFilter).length > 0) {
+        filter["shipment"] = shipmentFilter;
+    }
 
-        if (params.originPostalCode) {
-            filter["addresses"] = {
-                $some: {
-                    type: "FROM",
-                    $or: [
-                        { addressBookEntry: { address: { postalCode: { $ilike: `${params.originPostalCode}%` } } } },
-                        { address: { postalCode: { $ilike: `${params.originPostalCode}%` } } },
-                    ],
-                },
-            };
-        }
+    if (params.originPostalCode) {
+        filter["addresses"] = {
+            $some: {
+                type: "FROM",
+                $or: [
+                    { addressBookEntry: { address: { postalCode: { $ilike: `${params.originPostalCode}%` } } } },
+                    { address: { postalCode: { $ilike: `${params.originPostalCode}%` } } },
+                ],
+            },
+        };
+    }
 
-        if (params.destinationPostalCode) {
-            const dest = {
-                $some: {
-                    type: "TO",
-                    $or: [
-                        { addressBookEntry: { address: { postalCode: { $ilike: `${params.destinationPostalCode}%` } } } },
-                        { address: { postalCode: { $ilike: `${params.destinationPostalCode}%` } } },
-                    ],
-                },
-            };
-            filter["addresses"] = filter["addresses"]
-                ? { $and: [filter["addresses"], dest] }
-                : dest;
-        }
+    if (params.destinationPostalCode) {
+        const dest = {
+            $some: {
+                type: "TO",
+                $or: [
+                    { addressBookEntry: { address: { postalCode: { $ilike: `${params.destinationPostalCode}%` } } } },
+                    { address: { postalCode: { $ilike: `${params.destinationPostalCode}%` } } },
+                ],
+            },
+        };
+        filter["addresses"] = filter["addresses"]
+            ? { $and: [filter["addresses"], dest] }
+            : dest;
+    }
 
-        const orderByArr = Object.entries(orderBy).map(([field, dir]) => ({ [field]: dir }));
+    const orderByArr = Object.entries(orderBy).map(([field, dir]) => ({ [field]: dir }));
 
-    // Use findAndCount instead of separate count() + find()
     const [quotes, total] = await this.em.findAndCount(Quote, filter, {
         limit,
         offset: (page - 1) * limit,
@@ -138,32 +142,23 @@ export class TrackingService {
         ],
 
         fields: [
-            // Quote root (always include PK + anything in meta/filter)
             "id",
             "status",
             "shipmentType",
             "createdAt",
-
-            // Shipment
             "shipment.id",
             "shipment.trackingNumber",
             "shipment.shipDate",
             "shipment.currentStatus",
             "shipment.carrier",
-
-            // Line items
             "lineItems.id",
             "lineItems.type",
-
-            // Line item units
             "lineItems.units.id",
             "lineItems.units.length",
             "lineItems.units.width",
             "lineItems.units.height",
             "lineItems.units.weight",
             "lineItems.units.unitsOnPallet",
-
-            // Addresses
             "addresses.id",
             "addresses.type",
             "addresses.address",
