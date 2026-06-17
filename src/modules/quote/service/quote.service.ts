@@ -829,6 +829,10 @@ export class QuoteService {
             filter.shipmentType = params.shipmentType;
         }
 
+        if (params.quoteType) {
+            filter.quoteType = params.quoteType;
+        }
+
         // 7) Optional date-range filter (normalized to full days)
         if (params.dateFrom || params.dateTo) {
             filter.createdAt = {};
@@ -883,6 +887,7 @@ export class QuoteService {
                 fields: [
                     "name",
                     "quoteId",
+                    "quoteType",
                     "createdAt",
                     "shipmentType",
 
