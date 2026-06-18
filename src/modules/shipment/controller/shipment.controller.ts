@@ -7,6 +7,7 @@ import { UpdateShipmentDTO } from "../dto/update-shipment.dto";
 import { RolesGuard } from "src/guards/roles.guard";
 import { Role } from "src/decorators/role.decorator";
 import { ROLES } from "src/common/constants/roles";
+
 @Controller("shipments")
 export class ShipmentController {
     constructor(private readonly shipmentService: ShipmentService) {}

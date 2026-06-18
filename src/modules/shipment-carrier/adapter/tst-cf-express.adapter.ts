@@ -10,14 +10,27 @@ export class TSTCFExpressAdapter implements CarrierAdapter {
   readonly carrierName = 'tst-cf-express';
   private readonly baseUrl: string;
   private readonly mapper: TSTCFExpressMapper;
+  private readonly requestor: string;
+  private readonly authorization: string;
+  private readonly login?: string;
+  private readonly password?: string;
 
   constructor(params?: {
-    baseUrl?: string;
-    useMock?: boolean;
-  }) {
-    this.baseUrl = process.env.TST_CF_BASE_URL as string;
-    this.mapper = new TSTCFExpressMapper();
-  }
+  baseUrl?: string;
+  requestor?: string;
+  authorization?: string;
+  login?: string;
+  password?: string;
+  useMock?: boolean;
+}) {
+  this.baseUrl = process.env.TST_CF_BASE_URL as string || '';
+  this.requestor = params?.requestor || process.env.TST_CF_REQUESTOR as string;
+  this.authorization = params?.authorization || process.env.TST_CF_AUTHORIZATION as string;
+  this.login = params?.login || process.env.TST_CF_LOGIN as string;
+  this.password = params?.password || process.env.TST_CF_PASSWORD as string;
+  this.mapper = new TSTCFExpressMapper();
+}
+
 
   async getRates(req: any){
     const carrierPayload = this.buildRequest(req);
@@ -211,6 +224,10 @@ export class TSTCFExpressAdapter implements CarrierAdapter {
   async createShipment(quote: any, selectedRate: any): Promise<any> {
     try {
       const payload = this.mapper.mapShipment(quote, selectedRate);
+
+      payload.login = this.login || '';
+      payload.passwd = this.password || '';
+      
       const builder = new Builder({
         xmldec: { version: '1.0', encoding: 'ISO-8859-1' },
         renderOpts: { pretty: false },
@@ -237,8 +254,11 @@ export class TSTCFExpressAdapter implements CarrierAdapter {
 
       const parsed = await parseStringPromise(responseText, { explicitArray: false });
 
-      // FIX: include bolpuresults (the actual root element from TST XML)
-      const results = parsed.bolpuresults || parsed.bolpickupresults || parsed.bolresults || parsed.pickupresults;
+      const results = parsed.bolpuresults 
+        || parsed.bolpickupresults 
+        || parsed.bolresults 
+        || parsed.pickupresults 
+        || parsed;  // ← ADD THIS FALLBACK
 
       if (results?.errorcode) {
         throw new BadRequestException({
@@ -248,11 +268,173 @@ export class TSTCFExpressAdapter implements CarrierAdapter {
         });
       }
 
-      return results;
+    // Now extract the data
+    const proNumber = results?.pro;
+    const pickupConf = results?.pickup?.confnbr;
+    const bolImage = results?.bol?.imagedata;
+    console.log({proNumber, pickupConf, bolImage})
+    return {
+        ...results,
+        proNumber: proNumber ? String(proNumber) : null,
+        pickupConfirmation: pickupConf || null,
+        bolImage: bolImage || null,
+    };
 
     } catch (err: any) {
       console.error('>>> TST fetch threw:', err.message);
       throw err;
     }
+  }
+
+
+  /**
+   * Get status and tracking events for a TST CF Express shipment.
+   *
+   * @param proNumber - TST PRO number (e.g. "7011234567")
+   */
+  async getStatusAndEvents(proNumber: string,  testMode?: boolean): Promise<{ statusCd: string; events: any[] }> {
+    if (!this.requestor || !this.authorization) {
+      throw new BadRequestException(
+        'TST CF Express tracking is not enabled right now'
+      );
+    }
+
+    const payload = {
+      tracingrequest: {
+        requestor: this.requestor,
+        authorization: this.authorization,
+        ...(this.login && { login: this.login }),
+        ...(this.password && { passwd: this.password }),
+        testmode: testMode ? 'Y' : '',
+        language: 'en',
+        tracetype: 'P',  // P = TST-CF Pro Number
+        traceitems: {
+          item: [proNumber],
+        },
+      },
+    };
+
+    const builder = new Builder({
+      xmldec: { version: '1.0', encoding: 'ISO-8859-1' },
+      renderOpts: { pretty: false },
+      headless: false,
+    });
+
+    const xmlPayload = builder.buildObject(payload);
+
+    const response = await fetch(`${this.baseUrl}/xml/tracing`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/xml' },
+      body: xmlPayload,
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new BadRequestException(`TST CF Express tracking API error: ${response.status} — ${errorText}`);
+    }
+
+    const xmlText = await response.text();
+    const parsed = await parseStringPromise(xmlText, { explicitArray: false });
+    console.dir(parsed, { depth: null })
+    const results = parsed.traceresults;
+
+    if (results?.errorcode) {
+      throw new BadRequestException({
+        carrier: this.carrierName,
+        code: results.errorcode,
+        message: results.errormsg,
+        line: results.errorline,
+      });
+    }
+
+    // Handle single vs multiple traceitems
+    const rawItems = results?.traceitem;
+    const traceItems = Array.isArray(rawItems) ? rawItems : rawItems ? [rawItems] : [];
+
+    const traceItem = traceItems.find((item: any) => item.traceid === proNumber);
+    console.dir(rawItems, {depth: null})
+
+    if (!traceItem) {
+      throw new BadRequestException(`No tracking results found for PRO ${proNumber}`);
+    }
+
+    if (traceItem.valid !== 'Y') {
+        return {
+            statusCd: 'INFO_RECEIVED',  // or 'PENDING'
+            events: [{
+                timestamp: new Date().toISOString(),
+                status: 'Shipment created, awaiting pickup',
+                statusCode: 'OC',
+                description: 'BOL created, PRO assigned, not yet in transit',
+                location: null,
+            }],
+        };
+    }
+
+    // Parse shipment history events (YYYYMMDD + HHMM format)
+    const rawHistory = traceItem.shipmenthistory;
+    const historyArray = Array.isArray(rawHistory) ? rawHistory : rawHistory ? [rawHistory] : [];
+
+    const mappedEvents = historyArray.map((evt: any) => {
+      const dateStr = evt.date ? String(evt.date) : '';
+      const timeStr = evt.time ? String(evt.time).padStart(4, '0') : '';
+      const formattedDate = dateStr.length === 8
+        ? `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`
+        : dateStr;
+      const formattedTime = timeStr.length === 4
+        ? `${timeStr.slice(0,2)}:${timeStr.slice(2,4)}`
+        : timeStr;
+
+      return {
+        timestamp: formattedDate && formattedTime
+          ? `${formattedDate}T${formattedTime}:00`
+          : formattedDate,
+        statusCode: evt.code,
+        status: evt.description,
+        description: evt.description,
+        location: evt.location,
+      };
+    });
+
+    // Derive status from latest event or current status text
+    const latestEvent = mappedEvents[mappedEvents.length - 1];
+    const statusText = traceItem.status || '';
+
+    let statusCd = 'UNKNOWN';
+    if (latestEvent?.statusCode) {
+      statusCd = latestEvent.statusCode;
+    } else if (/delivered/i.test(statusText)) {
+      statusCd = 'DL';
+    } else if (/transit|en route/i.test(statusText)) {
+      statusCd = 'IT';
+    } else if (/picked up/i.test(statusText)) {
+      statusCd = 'PU';
+    } else if (/dock|facility|terminal/i.test(statusText)) {
+      statusCd = 'AR';
+    }
+
+    return {
+      statusCd,
+      events: mappedEvents,
+    };
+  }
+  private readonly TST_STATUS_MAP: Record<string, string> = {
+    'PU': 'PICKED_UP',
+    'P': 'PICKED_UP',
+    'IT': 'IN_TRANSIT',
+    'I': 'IN_TRANSIT',
+    'AR': 'AT_FACILITY',
+    'A': 'AT_FACILITY',
+    'DL': 'DELIVERED',
+    'D': 'DELIVERED',
+    'DE': 'DELIVERY_EXCEPTION',
+    'CA': 'CANCELLED',
+    'X': 'CANCELLED',
+    'HL': 'HELD_AT_LOCATION',
+    'RS': 'RETURN_TO_SHIPPER',
+  };
+
+  mapStatusToInternal(statusCd: string): string {
+    return this.TST_STATUS_MAP[statusCd?.toUpperCase()] || 'UNKNOWN';
   }
 }

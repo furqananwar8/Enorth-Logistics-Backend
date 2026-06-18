@@ -54,6 +54,9 @@ export class Shipment {
     bolNumber?: string | null;
 
     @Property({ nullable: true })
+    pickupConfirmation?: string | null;
+
+    @Property({ nullable: true })
     serviceName?: string;
     
     @Property({ nullable: true })

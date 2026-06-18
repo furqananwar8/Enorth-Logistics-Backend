@@ -16,7 +16,7 @@ import { ShipmentStatusDTO } from "../dto/get-shipment-status.dto";
 export class ShipmentCarrierController {
     constructor(private readonly em: EntityManager,
         private readonly shipmentCarrierService: ShipmentCarrierService,
-        private readonly requestContextService: RequestContextService
+        private readonly requestContextService: RequestContextService,
     ) {}
 
     @UseGuards(SessionAuthGuard, RolesGuard)

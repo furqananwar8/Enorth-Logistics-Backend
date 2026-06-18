@@ -20,6 +20,8 @@ import { ShipmentStatusDTO } from "../dto/get-shipment-status.dto";
 import { ShipmentStatus } from "src/common/enum/shipment-status";
 import { MinimaxAdapter } from "../adapter/minimax.adapter";
 import { PolarisAdapter } from "../adapter/polaris.adapter";
+import * as fs from 'fs';
+import * as path from 'path';
 
 @Injectable()
 export class ShipmentCarrierService {
@@ -33,9 +35,37 @@ export class ShipmentCarrierService {
         private readonly polarisAdapter: PolarisAdapter,
         private readonly mockTracking: MockCarrierTrackingService,
         private readonly paymentService: PaymentService,
+        private readonly tstcfAdapter: TSTCFExpressAdapter,
         private readonly requestContextService: RequestContextService,
     ) {}
     
+    private readonly uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads', 'shipping-labels');
+
+    private ensureDir(dir: string): void {
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    }
+
+    private sanitize(input: string): string {
+        return input.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
+    }
+
+    async saveBolPdf(carrier: string, trackingNumber: string, base64Data: string): Promise<string> {
+        const safeCarrier = this.sanitize(carrier);
+        const safeTracking = this.sanitize(trackingNumber);
+        const timestamp = Date.now();
+
+        const carrierDir = path.join(this.uploadDir, safeCarrier);
+        this.ensureDir(carrierDir);
+
+        const filename = `${safeTracking}_${timestamp}.pdf`;
+        const filePath = path.join(carrierDir, filename);
+
+        await fs.promises.writeFile(filePath, Buffer.from(base64Data, 'base64'));
+
+        // Return relative URL — served by static middleware or a controller method
+        return `/uploads/shipping-labels/${safeCarrier}/${filename}`;
+    }
+
     async createShipment(dto: CreateCarrierShipmentDTO, session: SessionData) {
         let carrierResponse: any;
 
@@ -128,18 +158,31 @@ export class ShipmentCarrierService {
         if (dto.carrier === Carrier.TST) {
             carrierResponse = await this.tstAdapter.createShipment(quote, dto.selectedRate);
 
-            const proNumber = carrierResponse?.pro || '';
-            const bolPdfBase64 = carrierResponse?.bol?.imagedata || '';
+            const proNumber = carrierResponse.proNumber;
+            const bolPdfBase64 = carrierResponse.bolImage;
+            const confirmationNumber = carrierResponse.pickupConfirmation;
 
+    
             shipment.trackingNumber = proNumber;
             shipment.carrierQuoteId = proNumber;
+            shipment.pickupConfirmation = confirmationNumber;
+
+            let bolPdfUrl: string | null = null;
+            if (bolPdfBase64) {
+                bolPdfUrl = await this.saveBolPdf(
+                    'TST',
+                    proNumber || shipment.trackingNumber || 'unknown',
+                    bolPdfBase64,
+                );
+            }
+
+            shipment.shippingLabels = bolPdfUrl;
 
             shipment.serviceName = dto.selectedRate?.serviceName || dto.selectedRate?.serviceType || 'STANDARD';
             shipment.serviceType = dto.selectedRate?.serviceType || 'ST';
             shipment.shipDate = quote?.shipment?.shipDate || new Date();
             shipment.currency = dto.selectedRate?.currency || Currency.CAD;
 
-            shipment.shippingLabels = null;
 
             const quotedTotal = Number(dto.selectedRate?.totalCharge || 0);
             
@@ -154,7 +197,7 @@ export class ShipmentCarrierService {
 
         if (dto.carrier === Carrier.TFORCE) {
             carrierResponse = await this.tforceAdapter.createShipment(dto, quote);
-
+            console.dir(carrierResponse, { depth: null })
             const detail = carrierResponse?.raw?.detail ?? {};
             const rateDetail = carrierResponse?.rateDetail?.[0];
     
@@ -729,6 +772,23 @@ export class ShipmentCarrierService {
 
                 status = this.fedexAdapter.mapStatusToInternal(statusCd);
                 events = trackingEvents;
+            }
+            break;
+
+            case Carrier.TST: {
+                try {
+                    const { statusCd, events: trackingEvents } = await this.tstcfAdapter.getStatusAndEvents(proNumber);
+                    status = this.tstcfAdapter.mapStatusToInternal(statusCd);
+                    events = trackingEvents;
+                } catch (err: any) {
+                    // If tracking fails (sandbox PRO or not yet in system), return pending
+                    if (err.message?.includes('Invalid or unknown PRO')) {
+                        status = 'PENDING';
+                        events = [];
+                    } else {
+                        throw err;
+                    }
+                }
             }
             break;
 

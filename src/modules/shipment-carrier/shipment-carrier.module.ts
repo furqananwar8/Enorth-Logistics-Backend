@@ -40,7 +40,11 @@ import { PolarisAdapter } from "./adapter/polaris.adapter";
         {
             provide: TSTCFExpressAdapter,
             useFactory: () => new TSTCFExpressAdapter({
-                baseUrl: getEnv(ENV.TST_CF_BASE_URL)
+                baseUrl: getEnv(ENV.TST_CF_BASE_URL),
+                requestor: getEnv(ENV.TST_CF_REQUESTOR),          
+                authorization: getEnv(ENV.TST_CF_AUTHORIZATION),  
+                login: getEnv(ENV.TST_CF_USERNAME),              
+                password: getEnv(ENV.TST_CF_PASSWORD),             
             })
         },
         {

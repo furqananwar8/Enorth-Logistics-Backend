@@ -119,6 +119,7 @@ private formatCountry(country: string | undefined): string {
       passwd: process.env.TST_CF_PASSWD || '',
       testmode: request?.testMode === false ? 'N' : 'Y',
       language: 'en',
+      assignpro: 'Y',
       xmlversion: '2.0',
       transit: request.tst?.includeTransit !== false ? 'Y' : 'N',
       shipdate: shipDate,
@@ -313,7 +314,7 @@ private formatCountry(country: string | undefined): string {
     const originAddr: any = originEntry;
     const destAddr: any =  destEntry;
     const shipDate = this.formatDateInt(quote?.shipment?.shipDate || new Date());
-   
+   console.dir({originAddr})
     const lines = (quote.lineItems?.units as any)?.map((unit: any) => ({
       description1: unit.description || 'General Freight',
       description2: '',
@@ -341,7 +342,7 @@ private formatCountry(country: string | undefined): string {
       authorization: process.env.TST_CF_AUTHORIZATION || '',
       login: process.env.TST_CF_LOGIN || '',
       passwd: process.env.TST_CF_PASSWD || '',
-      testmode: 'Y',
+      testmode: process.env.NODE_ENV !== 'production' ? 'Y' : '',
       language: 'en',
       assignpro: 'Y',
       
@@ -375,10 +376,8 @@ private formatCountry(country: string | undefined): string {
       brokername: 'Test Broker',
       ptype: 'S',
       pickupdate: shipDate,
-      // readytime: getTimeIn24HourFormat(originAddr.palletShippingReadyTime) ?? "0800",
-      // closetime: getTimeIn24HourFormat(originAddr.palletShippingCloseTime) ?? "1700",
-      readytime: "0800",
-      closetime: "1700",
+      readytime: this.convertToHHMM(originAddr?.palletShippingReadyTime) ?? '0800',
+      closetime: this.convertToHHMM(originAddr?.palletShippingCloseTime) ?? '1700',
       service: this.serviceMap[selectedRate?.serviceType] || 'ST',
       pff: '',
       
@@ -407,6 +406,29 @@ private formatCountry(country: string | undefined): string {
       dimensions: dimensions.length > 0 ? dimensions : undefined,
       si: [],
     };
+  }
+
+  // Add this helper method to your TSTCFExpressMapper class
+
+  private convertToHHMM(timeStr: string | undefined): string {
+      if (!timeStr) return '0800'; // default fallback
+      
+      const match = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)$/);
+      if (!match) {
+          // Already in HH:MM 24h format?
+          const simpleMatch = timeStr.match(/^(\d{2}):(\d{2})$/);
+          if (simpleMatch) return `${simpleMatch[1]}${simpleMatch[2]}`;
+          return '0800'; // fallback
+      }
+      
+      let hour = parseInt(match[1], 10);
+      const minute = match[2];
+      const period = match[3].toUpperCase();
+      
+      if (period === 'PM' && hour !== 12) hour += 12;
+      if (period === 'AM' && hour === 12) hour = 0;
+      
+      return `${hour.toString().padStart(2, '0')}${minute}`;
   }
 
   private mapAddress(addr: any): TSTCFAddress {

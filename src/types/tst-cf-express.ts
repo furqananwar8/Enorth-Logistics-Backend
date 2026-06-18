@@ -13,6 +13,7 @@ export interface TSTCFRateRequest {
   passwd: string;
   testmode: 'Y' | 'N';
   language: string;
+  assignpro: string;
   xmlversion: string;
   transit: 'Y' | 'N';
   shipdate: string; // YYYYMMDD
