@@ -717,13 +717,20 @@ export class ShipmentCarrierService {
                 events = trackingEvents;
             }
             break;
-            // Add other carriers here:
-            // case Carrier.FEDEX:
-            //   [status, events] = await Promise.all([
-            //     this.fedexAdapter.getShipmentStatus(proNumber),
-            //     this.fedexAdapter.getTrackingEvents(proNumber),
-            //   ]);
-            //   break;
+            
+            case Carrier.FEDEX: {
+                // Express: PACKAGE, COURIER_PAK  |  Freight: PALLET, FTL
+                const isFreight = shipment.shipmentType === ShipmentType.PALLET || shipment.shipmentType === ShipmentType.STANDARD_FTL;
+
+                // FDXE = Express (packages/parcels), FXFR = Freight (pallets/FTL)
+                const carrierCode = isFreight ? 'FXFR' : 'FDXE';
+
+                const { statusCd, events: trackingEvents } = await this.fedexAdapter.getStatusAndEvents(proNumber, carrierCode);
+
+                status = this.fedexAdapter.mapStatusToInternal(statusCd);
+                events = trackingEvents;
+            }
+            break;
 
             default:
             throw new BadRequestException(`Tracking not supported for carrier: ${dto.carrier}`);

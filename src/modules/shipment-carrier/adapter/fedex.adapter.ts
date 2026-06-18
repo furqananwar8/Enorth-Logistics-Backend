@@ -10,6 +10,101 @@ import { ENV } from "src/common/constants/env";
 // TYPES
 // ============================================================================
 
+// ── Tracking-specific types ────────────────────────────────────────────────
+
+interface FedExTrackingRequest {
+  trackingInfo: Array<{
+    shipDateBegin?: string;
+    shipDateEnd?: string;
+    trackingNumberInfo: {
+      trackingNumber: string;
+      carrierCode?: string;      // FDXE = Express, FDXG = Ground, FXFR = Freight
+      trackingNumberUniqueId?: string;
+    };
+  }>;
+  includeDetailedScans: boolean;
+}
+
+interface FedExScanEvent {
+  date: string;
+  eventType: string;
+  eventDescription: string;
+  exceptionCode?: string;
+  exceptionDescription?: string;
+  scanLocation: {
+    streetLines?: string[];
+    city?: string;
+    stateOrProvinceCode?: string;
+    postalCode?: string;
+    countryCode?: string;
+    countryName?: string;
+    residential?: boolean;
+  };
+  locationId?: string;
+  locationType?: string;
+  derivedStatusCode?: string;
+  derivedStatus?: string;
+}
+
+interface FedExLatestStatusDetail {
+  code: string;
+  derivedCode: string;
+  statusByLocale: string;
+  description: string;
+  scanLocation?: {
+    city?: string;
+    stateOrProvinceCode?: string;
+    postalCode?: string;
+    countryCode?: string;
+    residential?: boolean;
+  };
+}
+
+interface FedExTrackResult {
+  trackingNumberInfo: {
+    trackingNumber: string;
+    trackingNumberUniqueId?: string;
+    carrierCode?: string;
+  };
+  latestStatusDetail: FedExLatestStatusDetail;
+  scanEvents: FedExScanEvent[];
+  dateAndTimes?: Array<{
+    type: string;
+    dateTime: string;
+  }>;
+  deliveryDetails?: {
+    actualDeliveryAddress?: any;
+    receivedByName?: string;
+    deliveryAttempts?: string;
+    locationType?: string;
+    locationDescription?: string;
+  };
+  shipperInformation?: any;
+  recipientInformation?: any;
+  serviceDetail?: {
+    type?: string;
+    description?: string;
+    shortDescription?: string;
+  };
+  packageDetails?: any;
+  shipmentDetails?: any;
+}
+
+interface FedExTrackingResponse {
+  transactionId: string;
+  customerTransactionId?: string;
+  output: {
+    completeTrackResults: Array<{
+      trackingNumber: string;
+      trackResults: FedExTrackResult[];
+    }>;
+  };
+  errors?: Array<{
+    code: string;
+    message: string;
+  }>;
+}
+
 interface FedExCredentials {
   clientId: string;
   clientSecret: string;
@@ -220,9 +315,11 @@ export class FedExAdapter implements CarrierAdapter {
   readonly carrierName = "fedex";
   private readonly baseUrl = "https://apis-sandbox.fedex.com";
   private readonly credentials: FedExCredentials;
+  private readonly trackingCredentials: FedExCredentials | null;
   private readonly accountNumber: string;
   private readonly mappers: CarrierPayloadMapper[];
   private tokenCache: { token: string; expiresAt: number } | null = null;
+  private trackingTokenCache: { token: string; expiresAt: number } | null = null;
 
   private readonly LTL_TYPES = new Set(['PALLET', 'STANDARD_LTL', 'SPOT_LTL']);
   private readonly PARCEL_TYPES = new Set(['PACKAGE', 'COURIER_PAK', 'COURIER']);
@@ -237,11 +334,16 @@ export class FedExAdapter implements CarrierAdapter {
     clientId: string;
     clientSecret: string;
     accountNumber: string;
+    trackingClientId?: string;  
+    trackingClientSecret?: string;
   }) {
     this.credentials = {
       clientId: params.clientId,
       clientSecret: params.clientSecret,
     };
+     
+    this.trackingCredentials = params?.trackingClientId && params?.trackingClientSecret ? { clientId: params.trackingClientId, clientSecret: params.trackingClientSecret } : null;
+      
     this.accountNumber = params.accountNumber;
     this.mappers = [new FedExParcelMapper(), new FedExFreightMapper()];
   }
@@ -302,6 +404,42 @@ export class FedExAdapter implements CarrierAdapter {
     return data.access_token;
   }
 
+  private async getTrackingAuthToken(): Promise<string> {
+    if (!this.trackingCredentials) {
+        // Fallback to main credentials if tracking-specific ones aren't configured
+        return this.getAuthToken();
+    }
+
+    if (this.trackingTokenCache && this.trackingTokenCache.expiresAt > Date.now() + 300000) {
+        return this.trackingTokenCache.token;
+    }
+
+    const params = new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: this.trackingCredentials.clientId,
+        client_secret: this.trackingCredentials.clientSecret,
+    });
+
+    const response = await fetch(`${this.baseUrl}/oauth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`FedEx tracking auth failed: ${response.status} - ${errorText}`);
+    }
+
+    const data: FedExTokenResponse = await response.json();
+
+    this.trackingTokenCache = {
+        token: data.access_token,
+        expiresAt: Date.now() + (data.expires_in * 1000),
+    };
+
+    return data.access_token;
+}
   // --------------------------------------------------------------------------
   // RATES
   // --------------------------------------------------------------------------
@@ -650,5 +788,109 @@ export class FedExAdapter implements CarrierAdapter {
       'INTERNATIONAL_ECONOMY': '2-5 business days',
     };
     return map[serviceType] || 'Varies by destination';
+  }
+
+    // ── Status code mapping for tracking ─────────────────────────────────────
+  private readonly STATUS_MAP: Record<string, string> = {
+    'PU': 'PICKED_UP',
+    'OC': 'INFO_RECEIVED',
+    'IT': 'IN_TRANSIT',
+    'AR': 'AT_FACILITY',
+    'OD': 'OUT_FOR_DELIVERY',
+    'DL': 'DELIVERED',
+    'DE': 'DELIVERY_EXCEPTION',
+    'SE': 'SHIPMENT_EXCEPTION',
+    'CA': 'CANCELLED',
+    'HL': 'HELD_AT_LOCATION',
+    'RS': 'RETURN_TO_SHIPPER',
+    'DO': 'DROPPED_OFF',
+    'AP': 'APPOINTMENT_SET',
+    'FD': 'FREIGHT_DELIVERED',
+    'FP': 'FREIGHT_PICKED_UP',
+    'FS': 'FREIGHT_IN_TRANSIT',
+  };
+
+  /**
+   * Get status and tracking events for a FedEx shipment.
+   * Works for both Express (packages/parcels) and Freight (pallets/FTL).
+   */
+  async getStatusAndEvents(
+    trackingNumber: string,
+    carrierCode?: string,
+  ): Promise<{ statusCd: string; events: any[] }> {
+    const token = await this.getTrackingAuthToken();
+    console.log({token})
+    const payload: FedExTrackingRequest = {
+      trackingInfo: [
+        {
+          trackingNumberInfo: {
+            trackingNumber,
+            ...(carrierCode && { carrierCode }),
+          },
+        },
+      ],
+      includeDetailedScans: true,
+    };
+
+    const response = await fetch(`${this.baseUrl}/track/v1/trackingnumbers`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'X-locale': 'en_US',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    console.dir(response, { depth: null })
+
+    if (!response.ok) {
+      const errorText = await response.text();
+
+      throw new Error(`FedEx tracking API error: ${response.status} - ${errorText}`);
+    }
+
+    const data: FedExTrackingResponse = await response.json();
+
+    if (data.errors && data.errors.length > 0) {
+      const error = data.errors[0];
+      throw new Error(`FedEx tracking error: ${error.code} - ${error.message}`);
+    }
+
+    const completeResult = data.output?.completeTrackResults?.[0];
+    if (!completeResult || !completeResult.trackResults || completeResult.trackResults.length === 0) {
+      throw new Error(`No tracking results found for ${trackingNumber}`);
+    }
+
+    const trackResult = completeResult.trackResults[0];
+    const latestStatus = trackResult.latestStatusDetail;
+    const scanEvents = trackResult.scanEvents ?? [];
+
+    const mappedEvents = scanEvents.map((event) => ({
+      timestamp: event.date,
+      status: event.derivedStatus || event.eventDescription,
+      statusCode: event.derivedStatusCode || event.eventType,
+      description: event.eventDescription,
+      location: {
+        city: event.scanLocation?.city,
+        state: event.scanLocation?.stateOrProvinceCode,
+        postalCode: event.scanLocation?.postalCode,
+        country: event.scanLocation?.countryCode,
+        countryName: event.scanLocation?.countryName,
+      },
+      locationId: event.locationId,
+      locationType: event.locationType,
+      exceptionCode: event.exceptionCode,
+      exceptionDescription: event.exceptionDescription,
+    }));
+
+    return {
+      statusCd: latestStatus?.derivedCode || latestStatus?.code || 'UNKNOWN',
+      events: mappedEvents,
+    };
+  }
+
+  mapStatusToInternal(statusCd: string): string {
+    return this.STATUS_MAP[statusCd] || 'UNKNOWN';
   }
 }

@@ -33,6 +33,8 @@ import { PolarisAdapter } from "./adapter/polaris.adapter";
                 clientId: getEnv(ENV.FEDEX_CLIENT_ID)!,
                 clientSecret: getEnv(ENV.FEDEX_CLIENT_SECRET)!,
                 accountNumber: getEnv(ENV.FEDEX_US_ACCOUNT_NUMBER),
+                trackingClientId: getEnv(ENV.FEDEX_CLIENT_TRACKING_ID),
+                trackingClientSecret: getEnv(ENV.FEDEX_CLIENT_TRACKING_SECRET)
             }),
         },
         {
