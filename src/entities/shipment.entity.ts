@@ -83,8 +83,11 @@ export class Shipment {
     @Property({ nullable: true })
     lastTrackedAt?: Date;
 
-    @Property({ type: 'text', nullable: true })
+    @Property({ nullable: true })
     shippingLabels?: string | null;
+
+    @Property({ nullable: true })
+    bolPdf?: string | null;
 
     @OneToOne(() => Quote, { nullable: false, owner: true, hidden: true })
     quote!: Quote;

@@ -126,7 +126,7 @@ export class ShipmentCarrierService {
 
         if (dto.carrier === Carrier.FEDEX) {
             carrierResponse = await this.fedexAdapter.createShipment(dto, quote);
-        
+            console.log({carrierResponse})
             const tx = carrierResponse?.output?.transactionShipments?.[0];
             const shipmentRating = tx?.completedShipmentDetail?.shipmentRating?.shipmentRateDetails[0];
             shipment.trackingNumber = tx?.masterTrackingNumber;
@@ -176,7 +176,7 @@ export class ShipmentCarrierService {
                 );
             }
 
-            shipment.shippingLabels = bolPdfUrl;
+            shipment.bolPdf = bolPdfUrl;
 
             shipment.serviceName = dto.selectedRate?.serviceName || dto.selectedRate?.serviceType || 'STANDARD';
             shipment.serviceType = dto.selectedRate?.serviceType || 'ST';
@@ -243,8 +243,21 @@ export class ShipmentCarrierService {
             const surchargeRates = rates.filter((r) => !excludedRateCodes.has(r.code));
             const totalSurcharges = surchargeRates.reduce((sum, r) => sum + Number(r.value || 0), 0);
 
+            const bolDoc = carrierResponse.documents?.find((d: any) => d.type === '20');
+            const labelDoc = carrierResponse.documents?.find((d: any) => d.type === '30');
+            console.log({bolDoc, labelDoc})
+            let bolPdfUrl: string | null = null;
+            let labelPdfUrl: string | null = null;
+
+            if (bolDoc?.data && carrierResponse.proNumber) {
+                bolPdfUrl = await this.saveBolPdf('TFORCE', carrierResponse.proNumber, bolDoc.data);
+            }
+            if (labelDoc?.data && carrierResponse.proNumber) {
+                labelPdfUrl = await this.saveBolPdf('TFORCE', `${carrierResponse.proNumber}_label`, labelDoc.data);
+            }
             // PRO number is the TForce BOL/tracking number
             shipment.trackingNumber  = carrierResponse.proNumber;
+            shipment.bolNumber = carrierResponse.proNumber;
             shipment.carrierQuoteId  = String(carrierResponse.bolId ?? '');
 
             shipment.serviceName = rateDetail?.service?.description || 'TForce Freight LTL';
@@ -252,11 +265,8 @@ export class ShipmentCarrierService {
             shipment.shipDate    = dto.shipDate ? new Date(dto.shipDate) : new Date();
             shipment.currency    = currency as Currency;
 
-            // Label: documents array contains base64 PDFs — type '30' is the shipping label
-            const labelDoc = carrierResponse.documents?.find((d: any) => d.type === '30');
-            const bolDoc   = carrierResponse.documents?.find((d: any) => d.type === '20');
-            // Store base64 label data if available (adjust field name to match your entity)
-            shipment.shippingLabels = labelDoc?.data ?? bolDoc?.data ?? null;
+            shipment.shippingLabels = labelPdfUrl ?? null;
+            shipment.bolPdf = bolPdfUrl ?? null;
 
             shipment.totalBaseCharge      = grossCharge - discount;   // after-discount base
             shipment.totalSurcharges      = totalSurcharges;
@@ -313,7 +323,7 @@ export class ShipmentCarrierService {
             shipment.currency    = rateCurrency;
 
             // BOL PDF if available
-            shipment.shippingLabels = carrierResponse?.bolPdfBase64 ?? null;
+            shipment.bolPdf = carrierResponse?.bolPdfBase64 ?? null;
 
             // Pricing from DTO selectedRate (the live rate fetched before booking)
             shipment.totalBaseCharge       = selectedRate.totalCharge ?? 0;
@@ -396,7 +406,7 @@ export class ShipmentCarrierService {
             shipment.carrier         = Carrier.MINIMAX;
 
             // BOL PDF link if available
-            shipment.shippingLabels = carrierResponse.bolLink ?? null;
+            shipment.bolPdf = carrierResponse.bolLink ?? null;
 
             // Surcharges from selectedRate
             const quoteSurcharges = selectedRate.surcharges ?? [];
@@ -781,8 +791,23 @@ export class ShipmentCarrierService {
                     status = this.tstcfAdapter.mapStatusToInternal(statusCd);
                     events = trackingEvents;
                 } catch (err: any) {
-                    // If tracking fails (sandbox PRO or not yet in system), return pending
                     if (err.message?.includes('Invalid or unknown PRO')) {
+                        status = 'PENDING';
+                        events = [];
+                    } else {
+                        throw err;
+                    }
+                }
+            }
+            break;
+
+            case Carrier.TFORCE: {
+                try {
+                    const { statusCd, events: trackingEvents } = await this.tforceAdapter.getStatusAndEvents(proNumber);
+                    status = this.tforceAdapter.mapStatusToInternal(statusCd);
+                    events = trackingEvents;
+                } catch (err: any) {
+                    if (err.message?.includes('NFO') || err.message?.includes('not found')) {
                         status = 'PENDING';
                         events = [];
                     } else {

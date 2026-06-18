@@ -473,7 +473,7 @@ export class TForceAdapter implements CarrierAdapter {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`TForce auth failed: ${response.status} - ${errorText}`);
+      throw new BadRequestException(`TForce auth failed: ${response.status} - ${errorText}`);
     }
 
     const data: TForceTokenResponse = await response.json();
@@ -494,7 +494,7 @@ export class TForceAdapter implements CarrierAdapter {
   buildRequest(req: any): unknown {
     const mapper = this.mappers.find((m) => m.supports(req.type));
     if (!mapper) {
-      throw new Error(`TForce does not support shipment type: ${req.type}`);
+      throw new BadRequestException(`TForce does not support shipment type: ${req.type}`);
     }
 
     const isVolume = req.type === ShipmentType.STANDARD_FTL;
@@ -531,7 +531,7 @@ export class TForceAdapter implements CarrierAdapter {
     if (!response.ok) {
       const errorText = await response.text();
 
-      throw new Error(`TForce API error: ${response.status} - ${errorText}`);
+      throw new BadRequestException(`TForce API error: ${response.status} - ${errorText}`);
     }
     const responseInJson = await response.json();
 
@@ -549,7 +549,7 @@ export class TForceAdapter implements CarrierAdapter {
     // Surface any API-level errors early
     if (response.errors && response.errors.length > 0) {
       const messages = response.errors.map((e) => e.message);
-      throw new Error(`TForce returned errors: ${messages.join(', ')}`);
+      throw new BadRequestException(`TForce returned errors: ${messages.join(', ')}`);
     }
 
     const rate = response.rateResponse;
@@ -603,7 +603,7 @@ export class TForceAdapter implements CarrierAdapter {
       case ShipmentType.STANDARD_FTL:
         // TForce supports FTL *rating* via volumeRating endpoint
         // but has no API for FTL BOL creation — must go through TForce customer service
-        // throw new Error(`TForce does not support BOL creation for FTL shipments via API`);
+        // throw new BadRequestException(`TForce does not support BOL creation for FTL shipments via API`);
 
       default:
         return 'SKD';
@@ -743,7 +743,7 @@ export class TForceAdapter implements CarrierAdapter {
             };
         });
     } else {
-      const lineItem = await quote.lineItems.loadItems();
+      const lineItem = quote.lineItems;
       units = lineItem?.units || [];
     }
 
@@ -907,13 +907,14 @@ export class TForceAdapter implements CarrierAdapter {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`TForce Shipping API error: ${response.status} - ${errorText}`);
+      throw new BadRequestException(`TForce Shipping API error: ${response.status} - ${errorText}`);
     }
 
     const result = await response.json();
-
+    console.dir(result, { depth: null })
     // ── Normalise response to mirror FedEx shape ──────────────────────────────
     const detail = result?.detail ?? {};
+    console.dir(detail.documents?.image, {depth: null})
     return {
       raw: result,
 
@@ -1030,5 +1031,117 @@ export class TForceAdapter implements CarrierAdapter {
       '335': '1 business day',     // Next Day
     };
     return map[serviceCode ?? ''] ?? 'Varies by destination';
+  }
+
+ async getStatusAndEvents(proNumber: string): Promise<{ statusCd: string; events: any[] }> {
+    console.log('=== TFORCE TRACKING DEBUG ===');
+    console.log('Input proNumber:', proNumber);
+    console.log('proNumber type:', typeof proNumber);
+    console.log('proNumber length:', proNumber?.length);
+
+    const token = await this.getAuthToken();
+    console.log('Token obtained:', token ? 'YES (first 20 chars: ' + token.substring(0, 20) + '...)' : 'NO');
+
+    // TForce PRO must be exactly 9 digits
+    const cleanPro = String(proNumber).replace(/\D/g, '');
+    console.log('Clean PRO (digits only):', cleanPro);
+    console.log('Clean PRO length:', cleanPro.length);
+
+    if (cleanPro.length !== 9) {
+        console.warn('WARNING: PRO number is not 9 digits. TForce requires ^\\d{9}$ pattern');
+    }
+
+    // Use SAME base URL as shipping/rating, just different path
+    // Per docs: CIE uses api-version=cie-v1, Production uses api-version=v1
+    const baseUrl = 'https://api.tforcefreight.com';
+    const version = this.apiVersion || 'cie-v1';
+    const endpoint = `${baseUrl}/track/pro/${encodeURIComponent(cleanPro)}?api-version=${version}`;
+
+    console.log('Request URL:', endpoint);
+    console.log('apiVersion from adapter:', this.apiVersion);
+
+    const response = await fetch(endpoint, {
+        method: 'GET',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/json',
+            'Cache-Control': 'no-cache',
+        },
+    });
+
+    console.log('Response status:', response.status);
+    console.log('Response statusText:', response.statusText);
+
+    const responseText = await response.text();
+    console.log('Raw response body (first 500 chars):', responseText.substring(0, 500));
+
+    if (!response.ok) {
+        console.error('TForce tracking API ERROR:', response.status, responseText);
+        throw new BadRequestException(`TForce tracking API error: ${response.status} — ${responseText}`);
+    }
+
+    let data: any;
+    try {
+        data = JSON.parse(responseText);
+    } catch (e) {
+        console.error('Failed to parse JSON:', e);
+        throw new BadRequestException('Invalid JSON from TForce tracking API');
+    }
+
+    console.log('Parsed summary:', {
+        responseStatusCode: data.summary?.responseStatus?.code,
+        responseStatusMessage: data.summary?.responseStatus?.message,
+        detailCount: data.detail?.length,
+    });
+
+    if (data.summary?.responseStatus?.code !== 'OK') {
+        const msg = data.summary?.responseStatus?.message || 'Unknown error';
+        console.error('Business error:', msg);
+        throw new BadRequestException(`TForce tracking error: ${msg}`);
+    }
+
+    const detail = data.detail?.[0];
+    console.log('Detail:', detail ? {
+        pro: detail.pro,
+        currentStatus: detail.currentStatus,
+        eventCount: detail.events?.length,
+    } : 'NO DETAIL');
+
+    if (!detail) {
+        throw new BadRequestException(`No tracking details for PRO ${proNumber}`);
+    }
+
+    const mappedEvents = (detail.events || []).map((evt: any) => ({
+        timestamp: evt.date,
+        status: evt.description,
+        description: evt.description,
+        location: evt.serviceCenter,
+        trailerNumber: evt.trailer?.number,
+        trailerScac: evt.trailer?.scac,
+    }));
+
+    console.log('=== END DEBUG ===');
+
+    return {
+        statusCd: detail.currentStatus?.code || 'UNKNOWN',
+        events: mappedEvents,
+    };
+  }
+
+  mapStatusToInternal(statusCd: string): string {
+      const map: Record<string, string> = {
+          'PU': 'PICKED_UP',
+          'OC': 'INFO_RECEIVED',
+          'IT': 'IN_TRANSIT',
+          'AR': 'AT_FACILITY',
+          'OD': 'OUT_FOR_DELIVERY',
+          'DL': 'DELIVERED',
+          'DE': 'DELIVERY_EXCEPTION',
+          'SE': 'SHIPMENT_EXCEPTION',
+          'CA': 'CANCELLED',
+          'HL': 'HELD_AT_LOCATION',
+          'RS': 'RETURN_TO_SHIPPER',
+      };
+      return map[statusCd?.toUpperCase()] || 'UNKNOWN';
   }
 }
