@@ -441,11 +441,11 @@ export class MinimaxAdapter implements CarrierAdapter {
     declval?: number;
     codamt?: number;
     nopickup?: boolean;
-    services?: Record<string, boolean>;  // <-- ADD THIS if you want typed services
+    services?: Record<string, boolean>;
   }): Promise<MinimaxBOLResponse> {
     const payload = this.buildBOLPayload(dto);
     const url = `${this.credentials.baseUrl}/tbolentry4.xml`;
-    console.dir(payload, { depth: null })
+    
     const formData = new URLSearchParams();
     formData.set('xmlv', 'yes');
     formData.set('xmluser', this.credentials.username);
@@ -455,7 +455,7 @@ export class MinimaxAdapter implements CarrierAdapter {
         formData.set(key, String(value));
       }
     }
-    console.dir(formData, { depth: null })
+
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -468,7 +468,7 @@ export class MinimaxAdapter implements CarrierAdapter {
     }
 
     const parsed = this.parseXml(rawXml) as MinimaxBOLRawResponse;
-    console.dir(parsed, { depth: null })
+  
     return this.normalizeBOLResponse(parsed);
   }
 

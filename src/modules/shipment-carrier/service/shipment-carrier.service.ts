@@ -126,9 +126,9 @@ export class ShipmentCarrierService {
 
         if (dto.carrier === Carrier.FEDEX) {
             carrierResponse = await this.fedexAdapter.createShipment(dto, quote);
-            console.log({carrierResponse})
             const tx = carrierResponse?.output?.transactionShipments?.[0];
             const shipmentRating = tx?.completedShipmentDetail?.shipmentRating?.shipmentRateDetails[0];
+
             shipment.trackingNumber = tx?.masterTrackingNumber;
             shipment.shipDate = tx?.shipDatestamp || Date.now();
             shipment.serviceName = tx?.serviceName;
@@ -245,7 +245,7 @@ export class ShipmentCarrierService {
 
             const bolDoc = carrierResponse.documents?.find((d: any) => d.type === '20');
             const labelDoc = carrierResponse.documents?.find((d: any) => d.type === '30');
-            console.log({bolDoc, labelDoc})
+   
             let bolPdfUrl: string | null = null;
             let labelPdfUrl: string | null = null;
 
@@ -305,6 +305,18 @@ export class ShipmentCarrierService {
                 );
             }
 
+            //  // Save BOL PDF
+            // let bolPdfUrl: string | null = null;
+            // if (carrierResponse.bolPdfBase64) {
+            //     bolPdfUrl = await this.saveBolPdf('XPO', carrierResponse.proNumber || bolId, carrierResponse.bolPdfBase64);
+            // }
+
+            // // Save Shipping Labels
+            // let labelPdfUrl: string | null = null;
+            // if (carrierResponse.labelPdfBase64) {
+            //     labelPdfUrl = await this.saveBolPdf('XPO', `${carrierResponse.proNumber || bolId}_label`, carrierResponse.labelPdfBase64);
+            // }
+
             // ═══════════════════════════════════════════════════════════════════════
             // 2. USE DTO SELECTED RATE (already verified/fetched before this step)
             // ═══════════════════════════════════════════════════════════════════════
@@ -316,6 +328,10 @@ export class ShipmentCarrierService {
             shipment.bolNumber       = bolId;
             shipment.carrierQuoteId  = bolId;
             shipment.trackingNumber  = carrierResponse.proNumber;
+            shipment.shippingLabels = null;
+            shipment.bolPdf = null;
+            // shipment.shippingLabels = labelPdfUrl ?? null;
+            // shipment.bolPdf = bolPdfUrl;
 
             shipment.serviceName = selectedRate.serviceName ?? 'XPO LTL Freight';
             shipment.serviceType = selectedRate.serviceType ?? 'LTL';
@@ -407,6 +423,7 @@ export class ShipmentCarrierService {
 
             // BOL PDF link if available
             shipment.bolPdf = carrierResponse.bolLink ?? null;
+            shipment.shippingLabels = carrierResponse.labelLink ?? null;
 
             // Surcharges from selectedRate
             const quoteSurcharges = selectedRate.surcharges ?? [];
