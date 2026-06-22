@@ -1,5 +1,5 @@
 import { EntityManager } from "@mikro-orm/postgresql";
-import { Body, Controller, Post, Req, Res, Session, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Param, Post, Req, Res, Session, UseGuards } from "@nestjs/common";
 import { SessionAuthGuard } from "src/guards/sessionAuth.guard";
 import { ShipmentCarrierService } from "../service/shipment-carrier.service";
 import type { Request, Response } from "express";
@@ -18,6 +18,13 @@ export class ShipmentCarrierController {
         private readonly shipmentCarrierService: ShipmentCarrierService,
         private readonly requestContextService: RequestContextService,
     ) {}
+
+    @UseGuards(SessionAuthGuard, RolesGuard)
+    @Role([ROLES.ADMIN, ROLES.USER])
+    @Delete('/:id/cancel')
+    async cancelShipment(@Param('id') id: string) {
+        return this.shipmentCarrierService.cancelShipment(Number(id));
+    }
 
     @UseGuards(SessionAuthGuard, RolesGuard)
     @Role([ROLES.ADMIN, ROLES.USER])

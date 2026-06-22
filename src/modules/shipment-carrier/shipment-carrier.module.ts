@@ -56,6 +56,8 @@ import { TrackingWorkerService } from "../tracking/worker/tracking-worker.servic
                 accountNumber: getEnv(ENV.TFORCE_ACCOUNT_NUMBER)!,
                 tokenUrl: getEnv(ENV.TFORCE_TOKEN_URL),
                 apiScope: getEnv(ENV.TFORCE_API_SCOPE)!,
+                baseUrl: getEnv(ENV.TFORCE_BASE_URL)!,
+                basePickupUrl: getEnv(ENV.TFORCE_BASE_PICKUP_URL)!,
                 apiVersion: 'cie-v1'
             }),
         },

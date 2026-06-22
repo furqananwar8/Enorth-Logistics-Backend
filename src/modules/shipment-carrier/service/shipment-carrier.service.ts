@@ -262,6 +262,7 @@ export class ShipmentCarrierService {
             // PRO number is the TForce BOL/tracking number
             shipment.trackingNumber  = carrierResponse.proNumber;
             shipment.bolNumber = carrierResponse.proNumber;
+            shipment.pickupConfirmation = carrierResponse.pickupConfirmationNumber;
             shipment.carrierQuoteId  = String(carrierResponse.bolId ?? '');
 
             shipment.serviceName = rateDetail?.service?.description || 'TForce Freight LTL';
@@ -891,5 +892,67 @@ export class ShipmentCarrierService {
 
     // Add other carrier mappings here
     return ShipmentStatus.UNKNOWN;
+    }
+
+    // shipment-carrier.service.ts
+    async cancelShipment(shipmentId: number): Promise<any> {
+        const shipment = await this.em.findOne(Shipment, { id: shipmentId });
+        if (!shipment) {
+            throw new NotFoundException(`Shipment ${shipmentId} not found`);
+        }
+
+        if (!shipment.carrier) {
+            throw new BadRequestException('Shipment has no carrier assigned');
+        }
+
+        // Already cancelled?
+        if (shipment.currentStatus === 'CANCELLED') {
+            return { success: true, message: 'Shipment already cancelled', shipment };
+        }
+
+        let cancelResult: any;
+
+        switch (shipment.carrier) {
+            case Carrier.XPO: {
+                // XPO cancels by bolInstId
+                const bolInstId = shipment.carrierQuoteId ?? shipment.bolNumber;
+                if (!bolInstId) {
+                    throw new BadRequestException('XPO shipment missing bolInstId');
+                }
+                cancelResult = await this.xpoAdapter.cancelShipment(bolInstId);
+                break;
+            }
+
+            case Carrier.TFORCE: {
+                // TForce cancels by pickup confirmation number
+                const confirmationNumber = shipment.pickupConfirmation;
+                if (!confirmationNumber) {
+                    throw new BadRequestException('TForce shipment missing pickup confirmation number');
+                }
+                cancelResult = await this.tforceAdapter.cancelPickup(confirmationNumber);
+                break;
+            }
+
+           case Carrier.FEDEX: {
+                const trackingNumber = shipment.trackingNumber;
+                if (!trackingNumber) {
+                    throw new BadRequestException('FedEx shipment missing tracking number');
+                }
+                cancelResult = await this.fedexAdapter.cancelShipment(trackingNumber);
+                break;
+            }
+
+            default:
+                throw new BadRequestException(`Cancel not supported for carrier: ${shipment.carrier}`);
+        }
+
+        // Update shipment status
+        shipment.currentStatus = 'CANCELLED';
+        shipment.cancelledAt = new Date();
+        await this.em.flush();
+
+        return {
+            message: 'Shipment cancelled successfully',
+        };
     }
 }

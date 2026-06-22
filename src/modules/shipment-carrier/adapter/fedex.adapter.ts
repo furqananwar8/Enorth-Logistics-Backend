@@ -890,6 +890,42 @@ export class FedExAdapter implements CarrierAdapter {
     };
   }
 
+  async cancelShipment(trackingNumber: string): Promise<any> {
+    const token = await this.getAuthToken();
+    const transactionId = crypto.randomUUID();
+
+    const payload = {
+        accountNumber: { value: this.accountNumber },
+        cancellationDetail: {
+            trackingNumber,
+        },
+    };
+
+    const response = await fetch(`${this.baseUrl}/ship/v1/shipments/cancel`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+            'x-customer-transaction-id': transactionId,
+            'x-locale': 'en_US',
+        },
+        body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+        const errorMessages = data?.errors?.map((e: any) => e.message) || ['Unknown FedEx error'];
+        throw new BadRequestException(`FedEx cancel failed: ${errorMessages.join(', ')}`);
+    }
+
+    return {
+        success: true,
+        trackingNumber,
+        raw: data,
+    };
+  }
+
   mapStatusToInternal(statusCd: string): string {
     return this.STATUS_MAP[statusCd] || 'UNKNOWN';
   }

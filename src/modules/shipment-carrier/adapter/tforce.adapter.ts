@@ -12,6 +12,8 @@ interface TForceCredentials {
   clientSecret: string;
   tokenUrl: string;
   apiScope: string;
+  basePickupUrl: string;
+  baseUrl: string;
 }
 
 interface TForceTokenResponse {
@@ -412,7 +414,8 @@ class TForceVolumeMapper implements CarrierPayloadMapper {
 export class TForceAdapter implements CarrierAdapter {
   readonly carrierName = 'tforce';
 
-  private readonly baseUrl = 'https://api.tforcefreight.com/rating';
+  private readonly baseUrl: string = '';
+  private readonly basePickupUrl: string = '';
   private readonly credentials: TForceCredentials;
   private readonly accountNumber: string;
   private readonly apiVersion: string;
@@ -427,13 +430,18 @@ export class TForceAdapter implements CarrierAdapter {
     apiScope: string;
     tokenUrl?: string;
     apiVersion?: string;
+    basePickupUrl?: string;
+    baseUrl?: string;
   }) {
+    console.log(params.basePickupUrl)
     this.credentials = {
       clientId: params.clientId,
       clientSecret: params.clientSecret,
       // TForce uses Microsoft CIAM / Azure AD B2C for OAuth
       tokenUrl: params.tokenUrl || '',
-      apiScope: params.apiScope || ''
+      apiScope: params.apiScope || '',
+      basePickupUrl: params.basePickupUrl || '',
+      baseUrl: params.baseUrl || ''
     };
     this.accountNumber = params.accountNumber;
     this.apiVersion = params.apiVersion ?? 'v1';
@@ -1143,5 +1151,40 @@ export class TForceAdapter implements CarrierAdapter {
           'RS': 'RETURN_TO_SHIPPER',
       };
       return map[statusCd?.toUpperCase()] || 'UNKNOWN';
+  }
+
+  async cancelPickup(confirmationNumber: string): Promise<any> {
+    const token = await this.getAuthToken();
+    const version = this.apiVersion || 'cie-v1';
+    console.log({url: this.credentials.basePickupUrl})
+    // FIX: Use pickup base URL, not rating base URL
+    const url = `${this.credentials.basePickupUrl}/request/${confirmationNumber}?api-version=${version}`;
+
+    console.log('[TFORCE] Cancel URL:', url);
+
+    const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+        },
+    });
+
+    const data = await response.json();
+    console.dir(data, { depth: null });
+
+    if (!response.ok) {
+        const errorMsg =
+            data.responseStatus?.description ??
+            data.error?.message ??
+            'Unknown cancel error';
+        throw new BadRequestException(`TForce pickup cancel failed: ${errorMsg}`);
+    }
+
+    return {
+        success: data.responseStatus?.code === '1',
+        confirmationNumber,
+        raw: data,
+    };
   }
 }

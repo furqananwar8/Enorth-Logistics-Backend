@@ -844,34 +844,38 @@ export class XPOAdapter implements CarrierAdapter {
   }
 
   async cancelShipment(bolInstId: string): Promise<any> {
-    const token    = await this.getAuthToken();
-    const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
+      const token = await this.getAuthToken();
+      const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
 
-    const url = `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/cancel?testMode=${testMode}`;
+      const url = `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/cancel?testMode=${testMode}`;
 
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept:        'application/json',
-      },
-    });
+      const response = await fetch(url, {
+          method: 'PUT',
+          headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+          },
+          body: JSON.stringify({
+              bolInstId: String(bolInstId),
+          }),
+      });
 
-    const data = await response.json();
+      const data = await response.json();
 
-    if (!response.ok) {
-      const errorMsg =
-        data.error?.message ??
-        data.errors?.[0]?.message ??
-        'Unknown cancel error';
-      throw new BadRequestException(`XPO BOL cancel failed: ${errorMsg}`);
-    }
+      if (!response.ok) {
+          const errorMsg =
+              data.error?.message ??
+              data.errors?.[0]?.message ??
+              'Unknown cancel error';
+          throw new BadRequestException(`XPO BOL cancel failed: ${errorMsg}`);
+      }
 
-    return {
-      success: true,
-      bolInstId,
-      raw: data,
-    };
+      return {
+          success: true,
+          bolInstId,
+          raw: data,
+      };
   }
 
 
