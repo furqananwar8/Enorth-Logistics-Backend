@@ -898,18 +898,17 @@ export class XPOAdapter implements CarrierAdapter {
       eventsRes.json(),
     ]);
 
-    // Fix 1: Handle "No data found" gracefully — PRO might not be in tracking yet
+    // Handle "No data found" — PRO exists in XPO system but no tracking events yet
     const statusMsg = statusData.error?.message ?? statusData.errors?.[0]?.message ?? '';
     const eventsMsg = eventsData.error?.message ?? eventsData.errors?.[0]?.message ?? '';
     
     if (statusMsg.includes('No data found') || eventsMsg.includes('No data found')) {
       return {
-        statusCd: undefined,
+        statusCd: 'CREATED', // Shipment booked, not yet picked up / in transit
         events: [],
       };
     }
 
-    // Fix 2: Check status codes properly (not nested .status fields)
     if (!statusRes.ok) {
       const msg = statusData.error?.message ?? statusData.errors?.[0]?.message ?? 'Unknown error';
       throw new BadRequestException(`XPO status failed: ${msg}`);

@@ -160,7 +160,7 @@ export class TrackingWorkerService implements OnModuleInit, OnModuleDestroy {
   // ── TEST INTERVALS: 5 minutes for everything ──────────────────────
   private getPollInterval(canonicalStatus: string, shipment: Shipment): number {
     // TEST MODE: Poll every 5 minutes
-    const TEST_INTERVAL = 5 * 60 * 1000; // 5 minutes
+    const TEST_INTERVAL = 2 * 60 * 60 * 1000; // 5 minutes
     
     this.logger.debug(`[${shipment.carrier}] getPollInterval called for status="${canonicalStatus}" | lastEventAt=${shipment.lastEventAt?.toISOString() ?? 'null'}`);
     
