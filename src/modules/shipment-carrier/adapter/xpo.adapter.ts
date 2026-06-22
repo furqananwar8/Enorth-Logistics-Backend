@@ -2,6 +2,8 @@ import { CarrierAdapter } from 'src/types/shipment-carriers';
 import { Carrier, CreateCarrierShipmentDTO } from '../dto/create-carrier-shipment.dto';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Quote } from 'src/entities/quote.entity';
+import { getEnv } from 'src/utils/getEnv';
+import { ENV } from 'src/common/constants/env';
 
 // ============================================================================
 // XPO API TYPES
@@ -319,8 +321,8 @@ class XPOPackageMapper implements CarrierPayloadMapper {
 export class XPOAdapter implements CarrierAdapter {
   readonly carrierName = 'xpo';
 
-  private readonly baseUrl     = 'https://api.ltl.xpo.com';
-  private readonly tokenUrl    = 'https://api.ltl.xpo.com/token';
+  private readonly baseUrl     =  getEnv(ENV.XPO_BASE_URL);
+  private readonly tokenUrl    = getEnv(ENV.XPO_TOKEN_URL)
   private readonly credentials: XPOCredentials;
   private readonly accountNumber: string;
   private readonly mappers: CarrierPayloadMapper[];
@@ -373,7 +375,6 @@ export class XPOAdapter implements CarrierAdapter {
     const basicAuth = Buffer.from(
       `${this.credentials.consumerKey}:${this.credentials.consumerSecret}`,
     ).toString('base64');
-
     const body = new URLSearchParams({
       grant_type: 'password',
       username: this.credentials.username,
@@ -570,27 +571,43 @@ export class XPOAdapter implements CarrierAdapter {
 // XPO ADAPTER — ADD THESE METHODS
 // ============================================================================
 
-async createShipment(dto: CreateCarrierShipmentDTO, quote: Quote): Promise<any> {
-  const token    = await this.getAuthToken();
-  const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
+  // private toXPOTime = (d: Date): string => this.snapTime(d).toISOString();
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // 1. RESOLVE ADDRESSES & COMMODITIES
-  // ═══════════════════════════════════════════════════════════════════════
-  const fromAddress = quote.addresses?.find((a: any) => a.type === 'FROM')?.addressBookEntry;
-  const toAddress   = quote.addresses?.find((a: any) => a.type === 'TO')?.addressBookEntry;
-  const units       = quote.lineItems?.units || [];
+  private isWeekend = (dateStr: string): boolean => {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const date = new Date(year, month - 1, day); // month is 0-indexed
+    const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
+    return dayOfWeek === 0 || dayOfWeek === 6;
+  };
 
-  if (!fromAddress || !toAddress) {
-    throw new BadRequestException('Quote missing FROM or TO address');
-  }
+  private parseTimeStr = (timeStr: string | null | undefined, fallbackHour: number): { h: number; m: number } => {
+    if (!timeStr) return { h: fallbackHour, m: 0 };
+    const match = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    if (!match) return { h: fallbackHour, m: 0 };
+    let h = parseInt(match[1]);
+    const m = parseInt(match[2]);
+    const ampm = match[3]?.toUpperCase();
+    if (ampm === 'PM' && h !== 12) h += 12;
+    if (ampm === 'AM' && h === 12) h = 0;
+    return { h, m };
+  };
+ 
+  private isTooFarInFuture = (dateStr: string, maxDays: number = 30): boolean => {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const inputDate = new Date(year, month - 1, day);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const maxDate = new Date(today);
+    maxDate.setDate(today.getDate() + maxDays);
+    return inputDate > maxDate;
+  };
 
-  const formatPhone = (phone: string): string => {
+  private formatPhone = (phone: string): string => {
     const digits = (phone ?? '').replace(/\D/g, '').slice(-10);
     return `${digits.slice(0, 3)}-${digits.slice(3)}`;
   };
 
-  const snapTime = (d: Date): Date => {
+  private snapTime = (d: Date): Date => {
     const snapped = new Date(d);
     const mins = snapped.getMinutes();
     const snappedMins = [0, 15, 30, 45].reduce((prev, curr) =>
@@ -605,287 +622,313 @@ async createShipment(dto: CreateCarrierShipmentDTO, quote: Quote): Promise<any> 
     return snapped;
   };
 
-  const toXPOTime = (d: Date): string => snapTime(d).toISOString();
+  async createShipment(dto: CreateCarrierShipmentDTO, quote: Quote): Promise<any> {
+    const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
+    
+    // ═══════════════════════════════════════════════════════════════════════
+    // 0. GET AUTH TOKEN (cached, only refreshes when expired)
+    // ═══════════════════════════════════════════════════════════════════════
+    const token = await this.getAuthToken();
 
-  const parseTimeStr = (timeStr: string | null | undefined, fallbackHour: number): { h: number; m: number } => {
-    if (!timeStr) return { h: fallbackHour, m: 0 };
-    const match = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
-    if (!match) return { h: fallbackHour, m: 0 };
-    let h = parseInt(match[1]);
-    const m = parseInt(match[2]);
-    const ampm = match[3]?.toUpperCase();
-    if (ampm === 'PM' && h !== 12) h += 12;
-    if (ampm === 'AM' && h === 12) h = 0;
-    return { h, m };
-  };
+    // ═══════════════════════════════════════════════════════════════════════
+    // 1. RESOLVE ADDRESSES & COMMODITIES
+    // ═══════════════════════════════════════════════════════════════════════
+    const fromAddress = quote.addresses?.find((a: any) => a.type === 'FROM')?.addressBookEntry;
+    const toAddress   = quote.addresses?.find((a: any) => a.type === 'TO')?.addressBookEntry;
+    const units       = quote.lineItems?.units || [];
 
-  const shipDate = dto.shipDate ? new Date(dto.shipDate) : new Date();
+    if (!fromAddress || !toAddress) {
+      throw new BadRequestException('Quote missing FROM or TO address');
+    }
 
-  const maxDate = new Date();
-  maxDate.setDate(maxDate.getDate() + 30);
-  if (shipDate > maxDate) shipDate.setTime(maxDate.getTime());
+    if (!dto.shipDate) {
+      throw new BadRequestException('Ship date is required');
+    }
 
-  const day = shipDate.getDay(); // 0=Sun, 6=Sat
-  if (day === 0 || day === 6) {
-    throw new BadRequestException(
-      `Pickup date ${shipDate.toDateString()} falls on a ${day === 0 ? 'Sunday' : 'Saturday'}. XPO does not offer weekend pickup. Please select a weekday (Monday–Friday).`
-    );
-  }
+    if (this.isTooFarInFuture(dto.shipDate)) {
+      throw new BadRequestException(
+        `Pickup date ${dto.shipDate} is more than 30 days in the future. XPO only allows pickup dates within 30 days.`
+      );
+    }
 
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const dateStr = `${shipDate.getFullYear()}-${pad(shipDate.getMonth() + 1)}-${pad(shipDate.getDate())}`;
+    if (this.isWeekend(dto.shipDate)) {
+      throw new BadRequestException(
+        `Pickup date ${dto.shipDate} falls on a weekend. XPO does not offer weekend pickup. Please select a weekday (Monday–Friday).`
+      );
+    }
 
-  const readyTime = parseTimeStr(fromAddress.palletShippingReadyTime, 9);
-  const closeTime = parseTimeStr(fromAddress.palletShippingCloseTime, 17);
+    const shipDate = new Date(dto.shipDate);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const dateStr = `${shipDate.getFullYear()}-${pad(shipDate.getMonth() + 1)}-${pad(shipDate.getDate())}`;
 
-  const pkupDateISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00.000`;
-  const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00.000`;
+    const readyTime = this.parseTimeStr(fromAddress.palletShippingReadyTime, 9);
+    const closeTime = this.parseTimeStr(fromAddress.palletShippingCloseTime, 17);
 
-  const [firstName, ...lastParts] = (fromAddress.contactName ?? 'Freight Shipper').split(' ');
-  const lastName = lastParts.join(' ') || 'Shipper';
+    const pkupDateISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00.000`;
+    const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00.000`;
 
-  const commodityLines = units.map((item: any, idx: number) => ({
-    pieceCnt: item.handlingUnits ?? item.units?.length ?? 1,
-    packaging: {
-      packageCd: this.mapPackagingType(item.packaging ?? item.palletUnitType ?? 'PLT'),
-      packageWeight: {
+    const [firstName, ...lastParts] = (fromAddress.contactName ?? 'Freight Shipper').split(' ');
+    const lastName = lastParts.join(' ') || 'Shipper';
+
+    const commodityLines = units.map((item: any, idx: number) => ({
+      pieceCnt: item.handlingUnits ?? item.units?.length ?? 1,
+      packaging: {
+        packageCd: this.mapPackagingType(item.packaging ?? item.palletUnitType ?? 'PLT'),
+        packageWeight: {
+          weight:    Number(item.weight) || 500,
+          weightUom: item.weightUnit ?? 'LBS',
+        },
+        ...(item.length && item.width && item.height ? {
+          packageDimensions: {
+            length:        item.length,
+            width:         item.width,
+            height:        item.height,
+            dimensionsUom: 'INCH',
+          },
+        } : {}),
+      },
+      grossWeight: {
         weight:    Number(item.weight) || 500,
         weightUom: item.weightUnit ?? 'LBS',
       },
-      ...(item.length && item.width && item.height ? {
-        packageDimensions: {
-          length:        item.length,
-          width:         item.width,
-          height:        item.height,
-          dimensionsUom: 'INCH',
+      desc:      item.description || `Freight Item ${idx + 1}`,
+      nmfcClass: item.nmfcClass ?? '100',
+      hazmatInd: item.dangerousGoods ?? false,
+      ...(item.nmfc ? { nmfcItemCd: item.nmfc } : {}),
+    }));
+
+    const additionalService: Array<{ accsrlCode: string; prepaidOrCollect: string }> = [];
+    if (dto.tailgatePickup)   additionalService.push({ accsrlCode: 'OLG', prepaidOrCollect: 'P' });
+    if (dto.tailgateDelivery) additionalService.push({ accsrlCode: 'DLG', prepaidOrCollect: 'P' });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 2. BUILD & SEND BOL PAYLOAD
+    // ═══════════════════════════════════════════════════════════════════════
+    const bolPayload: any = {
+      autoAssignPro: true,
+      bol: {
+        requester: {
+          role: 'S',
+          userId: 'anmol@ulsfreight.ca',
+          requester: { firstName, lastName },
         },
-      } : {}),
-    },
-    grossWeight: {
-      weight:    Number(item.weight) || 500,
-      weightUom: item.weightUnit ?? 'LBS',
-    },
-    desc:      item.description || `Freight Item ${idx + 1}`,
-    nmfcClass: item.nmfcClass ?? '100',
-    hazmatInd: item.dangerousGoods ?? false,
-    ...(item.nmfc ? { nmfcItemCd: item.nmfc } : {}),
-  }));
-
-  const additionalService: Array<{ accsrlCode: string; prepaidOrCollect: string }> = [];
-  if (dto.tailgatePickup)   additionalService.push({ accsrlCode: 'OLG', prepaidOrCollect: 'P' });
-  if (dto.tailgateDelivery) additionalService.push({ accsrlCode: 'DLG', prepaidOrCollect: 'P' });
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // 2. BUILD & SEND BOL PAYLOAD
-  // ═══════════════════════════════════════════════════════════════════════
-  const bolPayload: any = {
-    autoAssignPro: true,
-    bol: {
-      requester: {
-        role: 'S',
-        requester: { firstName, lastName },
+        shipper: {
+          address: {
+            name:         fromAddress.companyName ?? fromAddress.contactName ?? '',
+            addressLine1: fromAddress.address.address1 ?? '',
+            addressLine2: fromAddress.address.address2 ?? '',
+            cityName:     fromAddress.address.city ?? '',
+            stateCd:      fromAddress.address.state ?? '',
+            countryCd:    fromAddress.address.country === 'CA' ? 'CN' : 'US',
+            postalCd:     fromAddress.address.postalCode ?? '',
+          },
+          contactInfo: {
+            companyName: fromAddress.companyName ?? '',
+            fullName:    fromAddress.contactName ?? '',
+            email: { emailAddr: fromAddress.email ?? '' },
+            phone: { phoneNbr: this.formatPhone(fromAddress.phoneNumber ?? '') },
+          },
+        },
+        consignee: {
+          address: {
+            name:         toAddress.companyName ?? toAddress.contactName ?? '',
+            addressLine1: toAddress.address.address1 ?? '',
+            addressLine2: toAddress.address.address2 ?? '',
+            cityName:     toAddress.address.city ?? '',
+            stateCd:      toAddress.address.state ?? '',
+            countryCd:    toAddress.address.country === 'CA' ? 'CN' : 'US',
+            postalCd:     toAddress.address.postalCode ?? '',
+          },
+          contactInfo: {
+            companyName: toAddress.companyName ?? '',
+            fullName:    toAddress.contactName ?? '',
+            email: { emailAddr: toAddress.email ?? '' },
+            phone: { phoneNbr: this.formatPhone(toAddress.phoneNumber ?? '') },
+          },
+        },
+        commodityLine: commodityLines,
+        chargeToCd: 'P',
+        ...(additionalService.length > 0 ? { additionalService } : {}),
+        pickupInfo: {
+          pkupDate:      pkupDateISO,
+          pkupTime:      pkupDateISO,
+          dockCloseTime: dockCloseISO,
+          contact: {
+            companyName: fromAddress.companyName ?? '',
+            fullName:    fromAddress.contactName ?? '',
+            phone: { phoneNbr: this.formatPhone(fromAddress.phoneNumber ?? '') },
+          },
+        },
+        remarks: `Quote Reference: ${quote.id ?? ''}`,
       },
-      shipper: {
-        address: {
-          name:         fromAddress.companyName ?? fromAddress.contactName ?? '',
-          addressLine1: fromAddress.address.address1 ?? '',
-          addressLine2: fromAddress.address.address2 ?? '',
-          cityName:     fromAddress.address.city ?? '',
-          stateCd:      fromAddress.address.state ?? '',
-          countryCd:    fromAddress.address.country === 'CA' ? 'CN' : 'US',
-          postalCd:     fromAddress.address.postalCode ?? '',
-        },
-        contactInfo: {
-          companyName: fromAddress.companyName ?? '',
-          fullName:    fromAddress.contactName ?? '',
-          email: { emailAddr: fromAddress.email ?? '' },
-          phone: { phoneNbr: formatPhone(fromAddress.phoneNumber ?? '') },
-        },
+    };
+
+    const bolUrl = `${this.baseUrl}/billoflading/1.0/billsoflading?testMode=${testMode}`;
+    const bolResponse = await fetch(bolUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization:  `Bearer ${token}`,
+        Accept:         'application/json',
       },
-      consignee: {
-        address: {
-          name:         toAddress.companyName ?? toAddress.contactName ?? '',
-          addressLine1: toAddress.address.address1 ?? '',
-          addressLine2: toAddress.address.address2 ?? '',
-          cityName:     toAddress.address.city ?? '',
-          stateCd:      toAddress.address.state ?? '',
-          countryCd:    toAddress.address.country === 'CA' ? 'CN' : 'US',
-          postalCd:     toAddress.address.postalCode ?? '',
-        },
-        contactInfo: {
-          companyName: toAddress.companyName ?? '',
-          fullName:    toAddress.contactName ?? '',
-          email: { emailAddr: toAddress.email ?? '' },
-          phone: { phoneNbr: formatPhone(toAddress.phoneNumber ?? '') },
-        },
-      },
-      commodityLine: commodityLines,
-      chargeToCd: 'P',
-      ...(additionalService.length > 0 ? { additionalService } : {}),
-      pickupInfo: {
-        pkupDate:      pkupDateISO,
-        pkupTime:      pkupDateISO,
-        dockCloseTime: dockCloseISO,
-        contact: {
-          companyName: fromAddress.companyName ?? '',
-          fullName:    fromAddress.contactName ?? '',
-          phone: { phoneNbr: formatPhone(fromAddress.phoneNumber ?? '') },
-        },
-      },
-      remarks: `Quote Reference: ${quote.id ?? ''}`,
-    },
-  };
-
-  console.dir(bolPayload, { depth: null })
-
-  const bolUrl = `${this.baseUrl}/billoflading/1.0/billsoflading?testMode=${testMode}`;
-  const bolResponse = await fetch(bolUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization:  `Bearer ${token}`,
-      Accept:         'application/json',
-    },
-    body: JSON.stringify(bolPayload),
-  });
-
-  const bolData = await bolResponse.json();
-console.log({bolData})
-  const bolInstId = bolData.data?.bolInfo?.bolInstId;
-  if (!bolResponse.ok || !bolInstId) {
-    console.dir(bolData.error.moreInfo, { depth: null})
-    const errorMsg =
-      bolData.error?.message ??
-      bolData.errors?.[0]?.message ??
-      'Unknown BOL error';
-    throw new BadRequestException(`XPO BOL creation failed: ${errorMsg}`);
-  }
-
-  const pkupTrmnlSic = bolData.data?.bolInfo?.pkupTrmnlSic ?? null;
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // 3. FETCH FULL BOL DETAILS
-  // ═══════════════════════════════════════════════════════════════════════
-  let fullBolData: any = null;
-  try {
-    const getBolUrl = `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}?testMode=${testMode}`;
-    const getResponse = await fetch(getBolUrl, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      body: JSON.stringify(bolPayload),
     });
-    if (getResponse.ok) {
-      fullBolData = await getResponse.json();
+
+    const bolData = await bolResponse.json();
+    const bolInstId = bolData.data?.bolInfo?.bolInstId;
+
+    if (!bolResponse.ok || !bolInstId) {
+      const errorMsg =
+        bolData.error?.message ??
+        bolData.errors?.[0]?.message ??
+        'Unknown BOL error';
+      throw new BadRequestException(`XPO BOL creation failed: ${errorMsg}`);
     }
-  } catch (err) {
-    console.dir(err, { depth: null })
+
+    const pkupTrmnlSic = bolData.data?.bolInfo?.pkupTrmnlSic ?? null;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 3. FETCH BOL PDF + LABELS IN PARALLEL
+    // ═══════════════════════════════════════════════════════════════════════
+    const totalPieces = commodityLines.reduce((sum: number, c: any) => sum + (c.pieceCnt || 1), 0);
+
+    const [bolPdfBase64, labelPdfBase64] = await Promise.all([
+      // 3a. BOL PDF
+      fetch(
+        `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/pdf?testMode=${testMode}`,
+        { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
+      ).then(async (res) => {
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data.data?.bolpdf?.contentType ?? null;
+      }).catch(() => null),
+
+      // 3b. Shipping Labels
+      fetch(
+        `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/shippinglabels/pdf?testMode=${testMode}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({
+            nbrOfLabels: totalPieces,
+            labelPosition: 1,
+            printerSettings: 'Normal Printer Settings',
+            bolInstId: String(bolInstId),
+          }),
+        }
+      ).then(async (res) => {
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data.data?.shippingLabel?.contentType ?? null;
+      }).catch(() => null),
+    ]);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 4. RETURN BOL DETAILS
+    // ═══════════════════════════════════════════════════════════════════════
+    return {
+      raw:          { bol: bolData },
+      bolId:        bolInstId,
+      proNumber:    bolData.data?.bolInfo?.proNbr ?? null,
+      pkupTrmnlSic,
+      pkupConfNbr:  bolData.data?.bolInfo?.pkupConfNbr ?? null,
+      pkupCallDate: bolData.data?.bolInfo?.pkupCallDate ?? null,
+      pkupCallSeq:  bolData.data?.bolInfo?.pkupCallSeq ?? null,
+      bolPdfBase64,
+      labelPdfBase64,
+    };
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // 4. FETCH BOL PDF
-  // ═══════════════════════════════════════════════════════════════════════
-  let bolPdfBase64: string | null = null;
-  try {
-    const pdfUrl = `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/pdf?testMode=${testMode}`;
-    const pdfResponse = await fetch(pdfUrl, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+  async cancelShipment(bolInstId: string): Promise<any> {
+    const token    = await this.getAuthToken();
+    const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
+
+    const url = `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/cancel?testMode=${testMode}`;
+
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept:        'application/json',
+      },
     });
-    if (pdfResponse.ok) {
-      const pdfData = await pdfResponse.json();
-      bolPdfBase64 = pdfData.data?.bolpdf?.bolPdfImage ?? null;
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      const errorMsg =
+        data.error?.message ??
+        data.errors?.[0]?.message ??
+        'Unknown cancel error';
+      throw new BadRequestException(`XPO BOL cancel failed: ${errorMsg}`);
     }
-  } catch {
-    // Non-fatal
+
+    return {
+      success: true,
+      bolInstId,
+      raw: data,
+    };
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // 5. RETURN BOL DETAILS
-  // ═══════════════════════════════════════════════════════════════════════
-  return {
-    raw:          { bol: bolData, fullBol: fullBolData },
-    bolId:        bolInstId,
-    proNumber:    bolData.data?.bolInfo?.proNbr ?? null,
-    pkupTrmnlSic,
-    pkupConfNbr:  bolData.data?.bolInfo?.pkupConfNbr ?? null,
-    pkupCallDate: bolData.data?.bolInfo?.pkupCallDate ?? null,
-    pkupCallSeq:  bolData.data?.bolInfo?.pkupCallSeq ?? null,
-    bolPdfBase64,
-  };
-}
 
-async cancelShipment(bolInstId: string): Promise<any> {
-  const token    = await this.getAuthToken();
-  const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
+  async getStatusAndEvents(proNbr: string): Promise<{
+    statusCd: string | undefined;
+    events: any[];
+  }> {
+    const token = await this.getAuthToken();
+    const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
 
-  const url = `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/cancel?testMode=${testMode}`;
+    const [statusRes, eventsRes] = await Promise.all([
+      fetch(
+        `${this.baseUrl}/tracking/1.0/shipments/shipment-status-details?referenceNumbers=${proNbr}`,
+        { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
+      ),
+      fetch(
+        `${this.baseUrl}/tracking/1.0/shipments/${proNbr}/tracking-events?testMode=${testMode}&detailLevel=DETAIL`,
+        { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
+      ),
+    ]);
 
-  const response = await fetch(url, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept:        'application/json',
-    },
-  });
+    const [statusData, eventsData] = await Promise.all([
+      statusRes.json(),
+      eventsRes.json(),
+    ]);
 
-  const data = await response.json();
-  console.log('Cancel BOL Response:', JSON.stringify(data, null, 2));
+    // Fix 1: Handle "No data found" gracefully — PRO might not be in tracking yet
+    const statusMsg = statusData.error?.message ?? statusData.errors?.[0]?.message ?? '';
+    const eventsMsg = eventsData.error?.message ?? eventsData.errors?.[0]?.message ?? '';
+    
+    if (statusMsg.includes('No data found') || eventsMsg.includes('No data found')) {
+      return {
+        statusCd: undefined,
+        events: [],
+      };
+    }
 
-  if (!response.ok) {
-    const errorMsg =
-      data.error?.message ??
-      data.errors?.[0]?.message ??
-      'Unknown cancel error';
-    throw new BadRequestException(`XPO BOL cancel failed: ${errorMsg}`);
+    // Fix 2: Check status codes properly (not nested .status fields)
+    if (!statusRes.ok) {
+      const msg = statusData.error?.message ?? statusData.errors?.[0]?.message ?? 'Unknown error';
+      throw new BadRequestException(`XPO status failed: ${msg}`);
+    }
+    if (!eventsRes.ok) {
+      const msg = eventsData.error?.message ?? eventsData.errors?.[0]?.message ?? 'Unknown error';
+      throw new BadRequestException(`XPO events failed: ${msg}`);
+    }
+
+    const shipmentStatus = statusData.data?.shipmentStatusDtls?.[0];
+    if (!shipmentStatus) {
+      throw new NotFoundException(`No tracking found for PRO ${proNbr}`);
+    }
+
+    return {
+      statusCd: shipmentStatus.shipmentStatus?.statusCd,
+      events: (eventsData.data?.shipmentTrackingEvent ?? []).map((e: any) => e.eventHdr),
+    };
   }
-
-  return {
-    success: true,
-    bolInstId,
-    raw: data,
-  };
-}
-
-
-async getStatusAndEvents(proNbr: string): Promise<{
-  statusCd: string | undefined;
-  events: any[];
-}> {
-  const token = await this.getAuthToken();
-  const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
-
-  const [statusRes, eventsRes] = await Promise.all([
-    fetch(
-      `${this.baseUrl}/tracking/1.0/shipments/shipment-status-details?referenceNumbers=${proNbr}`,
-      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
-    ),
-    fetch(
-      `${this.baseUrl}/tracking/1.0/shipments/${proNbr}/tracking-events?testMode=${testMode}&detailLevel=DETAIL`,
-      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
-    ),
-  ]);
-
-  const [statusData, eventsData] = await Promise.all([
-    statusRes.json(),
-    eventsRes.json(),
-  ]);
-
-  if (!statusRes.ok) {
-    const msg = statusData.error?.message ?? statusData.errors?.[0]?.message ?? 'Unknown error';
-    throw new BadRequestException(`XPO status failed: ${msg}`);
-  }
-  if (!eventsRes.ok) {
-    const msg = eventsData.error?.message ?? eventsData.errors?.[0]?.message ?? 'Unknown error';
-    throw new BadRequestException(`XPO events failed: ${msg}`);
-  }
-
-  const shipmentStatus = statusData.data?.shipmentStatusDtls?.[0];
-  if (!shipmentStatus) {
-    throw new NotFoundException(`No tracking found for PRO ${proNbr}`);
-  }
-
-  return {
-    statusCd: shipmentStatus.shipmentStatus?.statusCd,
-    events: (eventsData.data?.shipmentTrackingEvent ?? []).map((e: any) => e.eventHdr),
-  };
-}
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 private addHoursToISO(isoString: string, hours: number): string {

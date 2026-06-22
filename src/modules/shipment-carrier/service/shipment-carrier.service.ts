@@ -298,7 +298,7 @@ export class ShipmentCarrierService {
 
         if (dto.carrier === Carrier.XPO) {
             // ═══════════════════════════════════════════════════════════════════════
-            // 1. CREATE BOL (dto.selectedRate already contains the live-fetched rate)
+            // 1. CREATE BOL
             // ═══════════════════════════════════════════════════════════════════════
             const carrierResponse = await this.xpoAdapter.createShipment(dto, quote);
 
@@ -309,43 +309,50 @@ export class ShipmentCarrierService {
                 );
             }
 
-            //  // Save BOL PDF
-            // let bolPdfUrl: string | null = null;
-            // if (carrierResponse.bolPdfBase64) {
-            //     bolPdfUrl = await this.saveBolPdf('XPO', carrierResponse.proNumber || bolId, carrierResponse.bolPdfBase64);
-            // }
-
-            // // Save Shipping Labels
-            // let labelPdfUrl: string | null = null;
-            // if (carrierResponse.labelPdfBase64) {
-            //     labelPdfUrl = await this.saveBolPdf('XPO', `${carrierResponse.proNumber || bolId}_label`, carrierResponse.labelPdfBase64);
-            // }
+            // ═══════════════════════════════════════════════════════════════════════
+            // 2. SAVE BOL PDF TO SERVER
+            // ═══════════════════════════════════════════════════════════════════════
+            let bolPdfUrl: string | null = null;
+            if (carrierResponse.bolPdfBase64) {
+                bolPdfUrl = await this.saveBolPdf(
+                    'XPO',
+                    carrierResponse.proNumber || bolId,
+                    carrierResponse.bolPdfBase64,
+                );
+            }
 
             // ═══════════════════════════════════════════════════════════════════════
-            // 2. USE DTO SELECTED RATE (already verified/fetched before this step)
+            // 3. SAVE SHIPPING LABELS TO SERVER
+            // ═══════════════════════════════════════════════════════════════════════
+            let labelPdfUrl: string | null = null;
+            if (carrierResponse.labelPdfBase64) {
+                labelPdfUrl = await this.saveBolPdf(
+                    'XPO',
+                    `${carrierResponse.proNumber || bolId}_label`,
+                    carrierResponse.labelPdfBase64,
+                );
+            }
+
+            // ═══════════════════════════════════════════════════════════════════════
+            // 4. USE DTO SELECTED RATE
             // ═══════════════════════════════════════════════════════════════════════
             const selectedRate = dto.selectedRate ?? {};
             const rateCurrency = selectedRate.currency ?? 'USD';
-            const rateTotal    = selectedRate.totalCharge  ?? 0;
+            const rateTotal    = selectedRate.totalCharge ?? 0;
 
             // ── Map shipment fields ───────────────────────────────────────────────
             shipment.bolNumber       = bolId;
             shipment.carrierQuoteId  = bolId;
             shipment.trackingNumber  = carrierResponse.proNumber;
-            shipment.shippingLabels = null;
-            shipment.bolPdf = null;
-            // shipment.shippingLabels = labelPdfUrl ?? null;
-            // shipment.bolPdf = bolPdfUrl;
+            shipment.bolPdf          = bolPdfUrl;
+            shipment.shippingLabels  = labelPdfUrl;
 
             shipment.serviceName = selectedRate.serviceName ?? 'XPO LTL Freight';
             shipment.serviceType = selectedRate.serviceType ?? 'LTL';
             shipment.shipDate    = dto.shipDate ? new Date(dto.shipDate) : new Date();
             shipment.currency    = rateCurrency;
 
-            // BOL PDF if available
-            shipment.bolPdf = carrierResponse?.bolPdfBase64 ?? null;
-
-            // Pricing from DTO selectedRate (the live rate fetched before booking)
+            // Pricing from DTO selectedRate
             shipment.totalBaseCharge       = selectedRate.totalCharge ?? 0;
             shipment.totalSurcharges       = selectedRate.totalSurcharges ?? 0;
             shipment.totalFreightDiscounts = selectedRate.totalDiscount ?? 0;
