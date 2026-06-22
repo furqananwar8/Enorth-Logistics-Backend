@@ -18,7 +18,7 @@ export enum TrackingEventType {
 @Entity()
 @Index({ properties: ['shipment', 'carrierEventId'] })
 export class TrackingEvent {
-  @PrimaryKey()
+  @PrimaryKey({ autoincrement: true })
   id!: number;
 
   @ManyToOne(() => Shipment)
@@ -51,5 +51,5 @@ export class TrackingEvent {
   occurredAt!: Date;
 
   @Property({ onCreate: () => new Date() })
-  createdAt: Date = new Date();
+  createdAt?: Date = new Date();
 }

@@ -7,25 +7,25 @@ import { TForceAdapter } from "./adapter/tforce.adapter";
 import { getEnv } from "src/utils/getEnv";
 import { ENV } from "src/common/constants/env";
 import { XPOAdapter } from "./adapter/xpo.adapter";
-import { MockCarrierTrackingService } from "../mock-carrier-tracking/service/mock-carrier-tracking.service";
-import { BullModule } from "@nestjs/bullmq";
 import { PaymentModule } from "../payment/payment.module";
 import { RequestContextService } from "src/utils/request-context-service";
 import { MinimaxAdapter } from "./adapter/minimax.adapter";
 import { PolarisAdapter } from "./adapter/polaris.adapter";
+import { TrackingUpdateService } from "../tracking/tracking-update.service";
+import { TrackingSchedulerService } from "../tracking/tracking-scheduler.service";
+import { TrackingWorkerService } from "../tracking/worker/tracking-worker.service";
 
 @Module({
     imports: [
-        BullModule.registerQueue({
-            name: 'mock-tracking',
-        }),
         PaymentModule
     ],
     controllers: [ShipmentCarrierController],
     providers: [
         RequestContextService,
         ShipmentCarrierService,
-        MockCarrierTrackingService,
+        TrackingUpdateService,
+        TrackingWorkerService,
+        TrackingSchedulerService,
         {
             provide: FedExAdapter,
             useFactory: () => new FedExAdapter({
@@ -86,5 +86,6 @@ import { PolarisAdapter } from "./adapter/polaris.adapter";
             }),
         },
     ],
+    exports: [ShipmentCarrierService]
 })
 export class ShipmentCarrierModule {}

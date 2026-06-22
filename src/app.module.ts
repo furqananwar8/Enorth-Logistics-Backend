@@ -29,10 +29,10 @@ import { ShipmentCarrierModule } from './modules/shipment-carrier/shipment-carri
 import { TrackingModule } from './modules/tracking/tracking.module';
 import { PostalCodeModule } from './modules/postal-code/postal-code.module';
 import { PaymentModule } from './modules/payment/payment.module';
-import { MockCarrierTrackingModule } from './modules/mock-carrier-tracking/mock-carrier-tracking.module';
 import { SurchargeModule } from './modules/surcharge/surcharge.module';
 import { InvoiceModule } from './modules/invoice/invoice.module';
 import { ClaimModule } from './modules/claim/claim.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
@@ -45,6 +45,7 @@ import { ClaimModule } from './modules/claim/claim.module';
     MulterModule.register({
       dest: getEnv(ENV.IMAGE_UPLOAD_DESTINATION)
     }),
+    ScheduleModule.forRoot(),
     RedisModule,
     AuthModule,
     UserModule,
@@ -66,7 +67,6 @@ import { ClaimModule } from './modules/claim/claim.module';
     TrackingModule,
     PostalCodeModule,
     PaymentModule,
-    MockCarrierTrackingModule,
     SurchargeModule,
     InvoiceModule,
     ClaimModule

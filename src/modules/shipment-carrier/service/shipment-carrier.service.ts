@@ -1,5 +1,5 @@
 import { EntityManager } from "@mikro-orm/postgresql";
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { FedExAdapter, ShipmentType } from "../adapter/fedex.adapter";
 import { TSTCFExpressAdapter } from "../adapter/tst-cf-express.adapter";
 import { TForceAdapter } from "../adapter/tforce.adapter";
@@ -9,7 +9,6 @@ import { Shipment } from "src/entities/shipment.entity";
 import { Quote } from "src/entities/quote.entity";
 import { Currency } from "src/common/enum/currency.enum";
 import { XPOAdapter } from "../adapter/xpo.adapter";
-import { MockCarrierTrackingService } from "src/modules/mock-carrier-tracking/service/mock-carrier-tracking.service";
 import { Surcharge } from "src/entities/surcharge";
 import { getEnv } from "src/utils/getEnv";
 import { ENV } from "src/common/constants/env";
@@ -22,6 +21,9 @@ import { MinimaxAdapter } from "../adapter/minimax.adapter";
 import { PolarisAdapter } from "../adapter/polaris.adapter";
 import * as fs from 'fs';
 import * as path from 'path';
+import { CarrierStatusRegistry } from "src/modules/tracking/carrier-status.registery";
+import { getQueue } from "src/modules/tracking/tracking-queues";
+import { TrackingUpdateService } from "src/modules/tracking/tracking-update.service";
 
 @Injectable()
 export class ShipmentCarrierService {
@@ -33,11 +35,13 @@ export class ShipmentCarrierService {
         private readonly xpoAdapter: XPOAdapter,
         private readonly minimaxAdapter: MinimaxAdapter,
         private readonly polarisAdapter: PolarisAdapter,
-        private readonly mockTracking: MockCarrierTrackingService,
         private readonly paymentService: PaymentService,
         private readonly tstcfAdapter: TSTCFExpressAdapter,
         private readonly requestContextService: RequestContextService,
+        private readonly trackingUpdateService: TrackingUpdateService
     ) {}
+    private readonly logger = new Logger(ShipmentCarrierService.name);
+
     
     private readonly uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads', 'shipping-labels');
 
@@ -475,11 +479,25 @@ export class ShipmentCarrierService {
             }
         }
 
-        await this.mockTracking.scheduleTrackingTimeline(
-            dto.carrier,
-            shipment.trackingNumber as string,
-            'standard_delivery',
-        );
+        // THEN queue the job
+       try {
+            const queue = getQueue(shipment.carrier!);
+            
+            const jobId = `track-${shipment.id}-${Date.now()}`;
+
+            const result = await queue.add(
+                jobId,
+                { shipmentId: shipment.id, carrier: shipment.carrier },
+                { jobId, delay: 0 }
+            );
+        } catch (err: any) {
+            this.logger.error('[DEBUG] QUEUE ADD FAILED:', err.message);
+        }
+
+        // Set nextPollAt for scheduler fallback
+        shipment.nextPollAt = new Date(Date.now() + 5 * 60 * 1000);
+        await this.em.flush();
+       
 
         return {
             message: 'Shipment created successfully',
@@ -748,12 +766,11 @@ export class ShipmentCarrierService {
     }
 
 
-    async trackShipment(dto: ShipmentStatusDTO): Promise<any> {
-        // ── 1. Find shipment by ID and carrier ─────────────────────────────────
-        const shipment = await this.em.findOne(Shipment, {
-            id: dto.shipmentId,
-            carrier: dto.carrier,
-        });
+    async trackShipment(dto: ShipmentStatusDTO) {
+        const shipment = await this.em.findOne(Shipment, { 
+            id: dto.shipmentId, 
+            carrier: dto.carrier 
+        }, { populate: ['trackingEvents'] }); // Populate for immediate return
 
         if (!shipment) {
             throw new NotFoundException(
@@ -761,94 +778,89 @@ export class ShipmentCarrierService {
             );
         }
 
-        // ── 2. Get tracking number / PRO ───────────────────────────────────────
-        const proNumber = shipment.trackingNumber;
-        if (!proNumber) {
-            throw new BadRequestException(
-            `No tracking number available for shipment ${dto.shipmentId}`
-            );
-        }
+        const update = await this.fetchUpdate(shipment);
+        const result = await this.trackingUpdateService.apply(shipment, update);
 
-        // ── 3. Call carrier-specific adapter ───────────────────────────────────
-        let status: any;
-        let events: any;
-
-        switch (dto.carrier) {
-            case Carrier.XPO: {
-                const { statusCd, events: trackingEvents } = await this.xpoAdapter.getStatusAndEvents(proNumber);
-                status = this.mapCarrierStatusToInternal(dto.carrier, statusCd || '');
-                events = trackingEvents ?? (trackingEvents as any)?.events ?? [];
-            }
-            break;
-
-            case Carrier.MINIMAX: {
-                const { statusCd, events: trackingEvents } = await this.minimaxAdapter.getStatusAndEvents(proNumber);
-                status = statusCd;
-                events = trackingEvents;
-            }
-            break;
-            
-            case Carrier.FEDEX: {
-                // Express: PACKAGE, COURIER_PAK  |  Freight: PALLET, FTL
-                const isFreight = shipment.shipmentType === ShipmentType.PALLET || shipment.shipmentType === ShipmentType.STANDARD_FTL;
-
-                // FDXE = Express (packages/parcels), FXFR = Freight (pallets/FTL)
-                const carrierCode = isFreight ? 'FXFR' : 'FDXE';
-
-                const { statusCd, events: trackingEvents } = await this.fedexAdapter.getStatusAndEvents(proNumber, carrierCode);
-
-                status = this.fedexAdapter.mapStatusToInternal(statusCd);
-                events = trackingEvents;
-            }
-            break;
-
-            case Carrier.TST: {
-                try {
-                    const { statusCd, events: trackingEvents } = await this.tstcfAdapter.getStatusAndEvents(proNumber);
-                    status = this.tstcfAdapter.mapStatusToInternal(statusCd);
-                    events = trackingEvents;
-                } catch (err: any) {
-                    if (err.message?.includes('Invalid or unknown PRO')) {
-                        status = 'PENDING';
-                        events = [];
-                    } else {
-                        throw err;
-                    }
-                }
-            }
-            break;
-
-            case Carrier.TFORCE: {
-                try {
-                    const { statusCd, events: trackingEvents } = await this.tforceAdapter.getStatusAndEvents(proNumber);
-                    status = this.tforceAdapter.mapStatusToInternal(statusCd);
-                    events = trackingEvents;
-                } catch (err: any) {
-                    if (err.message?.includes('NFO') || err.message?.includes('not found')) {
-                        status = 'PENDING';
-                        events = [];
-                    } else {
-                        throw err;
-                    }
-                }
-            }
-            break;
-
-            default:
-            throw new BadRequestException(`Tracking not supported for carrier: ${dto.carrier}`);
-        }
-
-        // ── 4. Update shipment status in DB ──────────────────────────────────────
-        if (status) {
-            shipment.currentStatus = status;
-            shipment.lastTrackedAt = new Date();
-            await this.em.flush();
-        }
-
-        // ── 5. Return combined response ────────────────────────────────────────
         return {
             status: shipment.currentStatus,
-            events: events ?? []
+            statusChanged: result.statusChanged,
+            newEvents: result.newEvents,
+            events: shipment.trackingEvents.getItems().map(e => ({
+            id: e.id,
+            eventType: e.eventType,
+            status: e.status,
+            location: e.location,
+            occurredAt: e.occurredAt,
+            })),
+        };
+    }
+
+    async fetchUpdate(shipment: Shipment): Promise<any> {
+        const pro = shipment.trackingNumber;
+        if (!pro) throw new BadRequestException(`No PRO for shipment ${shipment.id}`);
+
+        let rawStatus: string;
+        let events: any[];
+
+        switch (shipment.carrier) {
+        case Carrier.XPO: {
+            const res = await this.xpoAdapter.getStatusAndEvents(pro);
+            rawStatus = res.statusCd || 'UNKNOWN';
+            events = res.events || [];
+            break;
+        }
+        case Carrier.MINIMAX: {
+            const res = await this.minimaxAdapter.getStatusAndEvents(pro);
+            rawStatus = res.statusCd;
+            events = res.events;
+            break;
+        }
+        case Carrier.FEDEX: {
+            const isFreight = shipment.shipmentType === ShipmentType.PALLET || shipment.shipmentType === ShipmentType.STANDARD_FTL;
+            const carrierCode = isFreight ? 'FXFR' : 'FDXE';
+            const res = await this.fedexAdapter.getStatusAndEvents(pro, carrierCode);
+            rawStatus = res.statusCd;
+            events = res.events;
+            break;
+        }
+        case Carrier.TST: {
+            try {
+            const res = await this.tstAdapter.getStatusAndEvents(pro);
+            rawStatus = res.statusCd;
+            events = res.events;
+            } catch (err: any) {
+            if (err.message?.includes('Invalid or unknown PRO')) {
+                rawStatus = 'PENDING';
+                events = [];
+            } else throw err;
+            }
+            break;
+        }
+        case Carrier.TFORCE: {
+            try {
+            const res = await this.tforceAdapter.getStatusAndEvents(pro);
+            rawStatus = res.statusCd;
+            events = res.events;
+            } catch (err: any) {
+            if (err.message?.includes('NFO') || err.message?.includes('not found')) {
+                rawStatus = 'PENDING';
+                events = [];
+            } else throw err;
+            }
+            break;
+        }
+        default:
+            throw new BadRequestException(`Unsupported carrier: ${shipment.carrier}`);
+        }
+
+        const normalized = CarrierStatusRegistry.normalize(shipment.carrier!, rawStatus);
+        
+        return {
+        rawStatus,
+        canonicalStatus: normalized.canonical,
+        eventType: normalized.eventType,
+        label: normalized.label,
+        events,
         };
     }
 

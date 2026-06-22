@@ -13,6 +13,8 @@ import { User } from "./user.entity";
 
 @Index({ properties: ['quote'] })
 
+@Index({ properties: ['nextPollAt', 'currentStatus'] })
+
 export class Shipment {
     @PrimaryKey()
     id!: number
@@ -88,6 +90,12 @@ export class Shipment {
 
     @Property({ nullable: true })
     bolPdf?: string | null;
+
+    @Property({ nullable: true })
+    nextPollAt?: Date;
+
+    @Property({ nullable: true })
+    pollRetryCount?: number = 0; // For exponential backoff on errors
 
     @OneToOne(() => Quote, { nullable: false, owner: true, hidden: true })
     quote!: Quote;
