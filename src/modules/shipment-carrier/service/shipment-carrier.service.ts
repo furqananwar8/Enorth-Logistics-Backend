@@ -201,7 +201,6 @@ export class ShipmentCarrierService {
 
         if (dto.carrier === Carrier.TFORCE) {
             carrierResponse = await this.tforceAdapter.createShipment(dto, quote);
-            console.dir(carrierResponse, { depth: null })
             const detail = carrierResponse?.raw?.detail ?? {};
             const rateDetail = carrierResponse?.rateDetail?.[0];
     

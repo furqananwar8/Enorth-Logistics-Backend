@@ -349,7 +349,6 @@ export class MinimaxAdapter implements CarrierAdapter {
     }
 
     const parsed = this.parseXml(rawXml) as MinimaxRateQuoteRawResponse;
-    console.dir(parsed, { depth: null })
     return this.normalizeRateQuoteResponse(parsed);
   }
 
@@ -496,7 +495,6 @@ export class MinimaxAdapter implements CarrierAdapter {
     if (!response.ok) {
       throw new BadRequestException(`Minimax tracking failed: ${response.status} - ${rawXml}`);
     }
-    console.dir(rawXml, { depth: null })
     let parsed: any;
     try {
       parsed = this.parseXml(rawXml);
@@ -513,9 +511,7 @@ export class MinimaxAdapter implements CarrierAdapter {
         `Invalid Minimax tracking response: missing 'protrace' root. Available roots: ${availableRoots}`
       );
     }
-    console.dir(root, { depth: null })
     const normalized = this.normalizeTrackingResponse(root);
-    console.dir(normalized, { depth: null })
     return {
       statusCd: normalized.status,
       events: normalized.events,
@@ -832,7 +828,6 @@ private parseXml(xml: string): any {
   // --------------------------------------------------------------------------
 
   private normalizeRateQuoteResponse(raw: MinimaxRateQuoteRawResponse): MinimaxRateQuoteResponse {
-    console.dir(raw)
     if (!raw.ratequote) {
       throw new BadRequestException('Invalid Minimax response: missing ratequote root');
     }

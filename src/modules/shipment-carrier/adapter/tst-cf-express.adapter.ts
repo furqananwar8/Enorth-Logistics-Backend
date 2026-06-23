@@ -335,7 +335,6 @@ export class TSTCFExpressAdapter implements CarrierAdapter {
 
     const xmlText = await response.text();
     const parsed = await parseStringPromise(xmlText, { explicitArray: false });
-    console.dir(parsed, { depth: null })
     const results = parsed.traceresults;
 
     if (results?.errorcode) {
@@ -352,7 +351,6 @@ export class TSTCFExpressAdapter implements CarrierAdapter {
     const traceItems = Array.isArray(rawItems) ? rawItems : rawItems ? [rawItems] : [];
 
     const traceItem = traceItems.find((item: any) => item.traceid === proNumber);
-    console.dir(rawItems, {depth: null})
 
     if (!traceItem) {
       throw new BadRequestException(`No tracking results found for PRO ${proNumber}`);

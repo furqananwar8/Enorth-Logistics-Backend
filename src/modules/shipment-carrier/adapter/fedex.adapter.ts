@@ -842,7 +842,6 @@ export class FedExAdapter implements CarrierAdapter {
       body: JSON.stringify(payload),
     });
 
-    console.dir(response, { depth: null })
 
     if (!response.ok) {
       const errorText = await response.text();

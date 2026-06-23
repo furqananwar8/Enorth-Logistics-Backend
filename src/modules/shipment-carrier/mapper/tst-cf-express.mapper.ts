@@ -314,7 +314,6 @@ private formatCountry(country: string | undefined): string {
     const originAddr: any = originEntry;
     const destAddr: any =  destEntry;
     const shipDate = this.formatDateInt(quote?.shipment?.shipDate || new Date());
-   console.dir({originAddr})
     const lines = (quote.lineItems?.units as any)?.map((unit: any) => ({
       description1: unit.description || 'General Freight',
       description2: '',

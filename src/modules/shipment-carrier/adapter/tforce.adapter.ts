@@ -919,10 +919,8 @@ export class TForceAdapter implements CarrierAdapter {
     }
 
     const result = await response.json();
-    console.dir(result, { depth: null })
     // ── Normalise response to mirror FedEx shape ──────────────────────────────
     const detail = result?.detail ?? {};
-    console.dir(detail.documents?.image, {depth: null})
     return {
       raw: result,
 
@@ -1171,7 +1169,6 @@ export class TForceAdapter implements CarrierAdapter {
     });
 
     const data = await response.json();
-    console.dir(data, { depth: null });
 
     if (!response.ok) {
         const errorMsg =

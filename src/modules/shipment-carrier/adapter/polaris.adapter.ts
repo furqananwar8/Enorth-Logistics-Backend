@@ -228,13 +228,11 @@ export class PolarisAdapter implements CarrierAdapter {
     });
     console.log({response})
     const rawJson = await response.text();
-    console.dir(rawJson, { depth: null })
     if (!response.ok) {
       throw new BadRequestException(`Polaris rate quote failed: ${response.status} - ${rawJson}`);
     }
 
     const parsed: PolarisRateRawResponse = JSON.parse(rawJson);
-    console.dir(parsed, { depth: null })
     return this.normalizeRateResponse(parsed);
   }
 
