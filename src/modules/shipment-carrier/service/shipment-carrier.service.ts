@@ -597,7 +597,7 @@ export class ShipmentCarrierService {
         const accountNumber = getEnv(
             isUS ? ENV.FEDEX_US_ACCOUNT_NUMBER : ENV.FEDEX_CA_ACCOUNT_NUMBER
         )!;
-
+       
         const fedex = new FedExAdapter({
             name: 'FedEx',
             clientId: getEnv(ENV.FEDEX_CLIENT_ID)!,
@@ -605,6 +605,7 @@ export class ShipmentCarrierService {
             accountNumber,
         });
         let rates = await fedex.getRates(fedexDto);
+
         let normalizedRates = fedex.mapFedExToCarrierRate(rates);
             normalizedRates = normalizedRates.find( rate => rate.serviceType === "FEDEX_GROUND") as any;
 
@@ -622,8 +623,7 @@ export class ShipmentCarrierService {
            
         }
 
-        const tstAdapter = new TSTCFExpressAdapter();
-        let rates = await tstAdapter.getRates(tstDto);
+        let rates = await this.tstAdapter.getRates(tstDto);
         
         const chargesSetByAdmin = [ShipmentType.PACKAGE, ShipmentType.PALLET].includes(tstDto.shipmentType) ? companyBasedRates.LTLRate : companyBasedRates.FTLRate;
         return {...rates, chargesSetByAdmin, finalTotalWithAdminCut: Number(rates?.totalPrice as number + (chargesSetByAdmin ||0))};

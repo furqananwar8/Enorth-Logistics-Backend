@@ -115,8 +115,8 @@ private formatCountry(country: string | undefined): string {
     return {
       requestor: process.env.TST_CF_REQUESTOR || '',
       authorization: process.env.TST_CF_AUTHORIZATION || '',
-      login: process.env.TST_CF_LOGIN || '',
-      passwd: process.env.TST_CF_PASSWD || '',
+      login: process.env.TST_CF_USERNAME || '',
+      passwd: process.env.TST_CF_PASSWORD || '',
       testmode: request?.testMode === false ? 'N' : 'Y',
       language: 'en',
       assignpro: 'Y',
@@ -221,8 +221,8 @@ private formatCountry(country: string | undefined): string {
   //   return {
   //     requestor: process.env.TST_CF_REQUESTOR || '',
   //     authorization: process.env.TST_CF_AUTHORIZATION || '',
-  //     login: process.env.TST_CF_LOGIN || '',
-  //     passwd: process.env.TST_CF_PASSWD || '',
+  //     login: process.env.TST_CF_USERNAME || '',
+  //     passwd: process.env.TST_CF_PASSWORD || '',
   //     testmode: req?.testMode === false ? 'N' : 'Y',
   //     language: 'en',
   //     xmlversion: '2.0',
@@ -274,8 +274,8 @@ private formatCountry(country: string | undefined): string {
     return {
         requestor: process.env.TST_CF_REQUESTOR,
         authorization: process.env.TST_CF_AUTHORIZATION,
-        login: process.env.TST_CF_LOGIN,
-        passwd: process.env.TST_CF_PASSWD,
+        login: process.env.TST_CF_USERNAME,
+        passwd: process.env.TST_CF_PASSWORD,
         testmode: 'Y',
         language: 'en',
         xmlversion: '2.0',
@@ -340,8 +340,8 @@ private formatCountry(country: string | undefined): string {
     return {
       requestor: process.env.TST_CF_REQUESTOR || '',
       authorization: process.env.TST_CF_AUTHORIZATION || '',
-      login: process.env.TST_CF_LOGIN || '',
-      passwd: process.env.TST_CF_PASSWD || '',
+      login: process.env.TST_CF_USERNAME || '',
+      passwd: process.env.TST_CF_PASSWORD || '',
       testmode: process.env.NODE_ENV !== 'production' ? 'Y' : '',
       language: 'en',
       assignpro: 'Y',
