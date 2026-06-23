@@ -2,7 +2,7 @@
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 
-export const redisConnection = new IORedis(process.env.REDIS_URL!, {
+export const redisConnection = new IORedis(process.env.REDIS_CLIENT_URL!, {
   maxRetriesPerRequest: null,
 });
 

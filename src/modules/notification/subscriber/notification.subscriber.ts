@@ -11,7 +11,10 @@ export class NotificationSubscriber implements OnModuleInit, OnModuleDestroy {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly sseService: SSEService,
   ) {
-    this.subscriber = new Redis(redis.options);
+    this.subscriber = new Redis({
+      host: redis.options.host || '127.0.0.1',
+      port: redis.options.port || 6380,
+    });
   }
 
   onModuleInit() {
