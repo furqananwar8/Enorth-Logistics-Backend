@@ -48,11 +48,45 @@ private formatCountry(country: string | undefined): string {
    * Format freight class to TST 3-digit code: 50 → "050", 55 → "055", 77.5 → "070"
    */
   private formatFreightClass(cls: string | number | undefined): string {
-      if (!cls && cls !== 0) return '050'; // Default if undefined/null/empty
-      const num = parseFloat(String(cls));
-      if (isNaN(num)) return '050'; // Default if unparseable
-      if (num === 77.5) return '070';
-      return String(Math.round(num)).padStart(3, '0');
+    if (!cls && cls !== 0) return '';
+
+    const num = parseFloat(String(cls));
+    if (isNaN(num)) return '';
+
+    // TST-CF Express ONLY accepts these 18 exact 3-digit codes
+    const TST_CLASS_MAP: Record<number, string> = {
+      50:   '050',
+      55:   '055',
+      60:   '060',
+      65:   '065',
+      70:   '070',
+      77.5: '077',
+      85:   '085',
+      92.5: '092',
+      100:  '100',
+      110:  '110',
+      125:  '125',
+      150:  '150',
+      175:  '175',
+      200:  '200',
+      250:  '250',
+      300:  '300',
+      400:  '400',
+      500:  '500',
+    };
+
+    // Exact match
+    if (TST_CLASS_MAP[num] !== undefined) {
+      return TST_CLASS_MAP[num];
+    }
+
+    // Round to nearest valid TST class
+    const validClasses = Object.keys(TST_CLASS_MAP).map(Number);
+    const closest = validClasses.reduce((prev, curr) =>
+      Math.abs(curr - num) < Math.abs(prev - num) ? curr : prev
+    );
+
+    return TST_CLASS_MAP[closest] || '';
   }
 
   /**
