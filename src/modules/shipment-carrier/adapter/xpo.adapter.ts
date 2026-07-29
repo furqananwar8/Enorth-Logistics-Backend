@@ -624,10 +624,15 @@ export class XPOAdapter implements CarrierAdapter {
 
   async createShipment(dto: CreateCarrierShipmentDTO, quote: Quote): Promise<any> {
     const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
+    const quoteId = quote.id ?? 'unknown';
+    const logPrefix = `[XPO][Quote:${quoteId}]`;
+
     // ═══════════════════════════════════════════════════════════════════════
-    // 0. GET AUTH TOKEN (cached, only refreshes when expired)
+    // 0. GET AUTH TOKEN
     // ═══════════════════════════════════════════════════════════════════════
+    console.log(`${logPrefix} Starting shipment creation. Test mode: ${testMode}`);
     const token = await this.getAuthToken();
+    console.log(`${logPrefix} Auth token acquired (length: ${token?.length ?? 0})`);
 
     // ═══════════════════════════════════════════════════════════════════════
     // 1. RESOLVE ADDRESSES & COMMODITIES
@@ -636,21 +641,28 @@ export class XPOAdapter implements CarrierAdapter {
     const toAddress   = quote.addresses?.find((a: any) => a.type === 'TO')?.addressBookEntry;
     const units       = quote.lineItems?.units || [];
 
+    console.log(`${logPrefix} Resolved addresses — FROM: ${fromAddress?.companyName ?? 'N/A'}, TO: ${toAddress?.companyName ?? 'N/A'}`);
+    console.log(`${logPrefix} Commodity units count: ${units.length}`);
+
     if (!fromAddress || !toAddress) {
+      console.error(`${logPrefix} VALIDATION FAILED: Missing FROM or TO address`);
       throw new BadRequestException('Quote missing FROM or TO address');
     }
 
     if (!dto.shipDate) {
+      console.error(`${logPrefix} VALIDATION FAILED: Ship date missing`);
       throw new BadRequestException('Ship date is required');
     }
 
     if (this.isTooFarInFuture(dto.shipDate)) {
+      console.error(`${logPrefix} VALIDATION FAILED: Ship date ${dto.shipDate} > 30 days future`);
       throw new BadRequestException(
         `Pickup date ${dto.shipDate} is more than 30 days in the future. XPO only allows pickup dates within 30 days.`
       );
     }
 
     if (this.isWeekend(dto.shipDate)) {
+      console.error(`${logPrefix} VALIDATION FAILED: Ship date ${dto.shipDate} is weekend`);
       throw new BadRequestException(
         `Pickup date ${dto.shipDate} falls on a weekend. XPO does not offer weekend pickup. Please select a weekday (Monday–Friday).`
       );
@@ -665,6 +677,8 @@ export class XPOAdapter implements CarrierAdapter {
 
     const pkupDateISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00.000`;
     const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00.000`;
+
+    console.log(`${logPrefix} Pickup window — Ready: ${pkupDateISO}, Dock Close: ${dockCloseISO}`);
 
     const [firstName, ...lastParts] = (fromAddress.contactName ?? 'Freight Shipper').split(' ');
     const lastName = lastParts.join(' ') || 'Shipper';
@@ -696,9 +710,15 @@ export class XPOAdapter implements CarrierAdapter {
       ...(item.nmfc ? { nmfcItemCd: item.nmfc } : {}),
     }));
 
+    console.log(`${logPrefix} Built ${commodityLines.length} commodity lines`);
+
     const additionalService: Array<{ accsrlCode: string; prepaidOrCollect: string }> = [];
     if (dto.tailgatePickup)   additionalService.push({ accsrlCode: 'OLG', prepaidOrCollect: 'P' });
     if (dto.tailgateDelivery) additionalService.push({ accsrlCode: 'DLG', prepaidOrCollect: 'P' });
+
+    if (additionalService.length > 0) {
+      console.log(`${logPrefix} Additional services: ${additionalService.map(s => s.accsrlCode).join(', ')}`);
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // 2. BUILD BOL PAYLOAD
@@ -762,8 +782,13 @@ export class XPOAdapter implements CarrierAdapter {
       },
     };
 
+    console.log(`${logPrefix} ═══════════════════════════════════════════════`);
+    console.log(`${logPrefix} BOL PAYLOAD:`);
+    console.log(JSON.stringify(bolPayload, null, 2));
+    console.log(`${logPrefix} ═══════════════════════════════════════════════`);
+
     // ═══════════════════════════════════════════════════════════════════════
-    // 3. CREATE BOL — NON-BLOCKING (shipment must succeed even if BOL fails)
+    // 3. CREATE BOL — NON-BLOCKING
     // ═══════════════════════════════════════════════════════════════════════
     let bolData: any = null;
     let bolInstId: string | null = null;
@@ -772,6 +797,8 @@ export class XPOAdapter implements CarrierAdapter {
 
     try {
       const bolUrl = `${this.baseUrl}/billoflading/1.0/billsoflading?testMode=${testMode}`;
+      console.log(`${logPrefix} POST ${bolUrl}`);
+
       const bolResponse = await fetch(bolUrl, {
         method: 'POST',
         headers: {
@@ -782,82 +809,152 @@ export class XPOAdapter implements CarrierAdapter {
         body: JSON.stringify(bolPayload),
       });
 
-      bolData = await bolResponse.json();
-      bolInstId = bolData.data?.bolInfo?.bolInstId ?? null;
+      console.log(`${logPrefix} BOL response status: ${bolResponse.status} ${bolResponse.statusText}`);
 
-      if (!bolResponse.ok || !bolInstId) {
+      // Log raw response headers for debugging
+      const responseHeaders: Record<string, string> = {};
+      bolResponse.headers.forEach((value, key) => { responseHeaders[key] = value; });
+      console.log(`${logPrefix} BOL response headers:`, JSON.stringify(responseHeaders));
+
+      const responseText = await bolResponse.text();
+      console.log(`${logPrefix} BOL raw response body:`, responseText);
+
+      // Parse only if there's content
+      bolData = responseText ? JSON.parse(responseText) : null;
+      console.log(`${logPrefix} BOL parsed response:`, JSON.stringify(bolData, null, 2));
+
+      // Deep-dive into the response structure
+      console.log(`${logPrefix} BOL response structure check:`);
+      console.log(`  - bolData exists: ${!!bolData}`);
+      console.log(`  - bolData.data exists: ${!!bolData?.data}`);
+      console.log(`  - bolData.data.bolInfo exists: ${!!bolData?.data?.bolInfo}`);
+      console.log(`  - bolData.data.bolInfo.bolInstId: ${bolData?.data?.bolInfo?.bolInstId ?? 'MISSING'}`);
+      console.log(`  - bolData.error exists: ${!!bolData?.error}`);
+      console.log(`  - bolData.errors exists: ${!!bolData?.errors}`);
+
+      if (bolData?.error) {
+        console.error(`${logPrefix} BOL API returned error object:`, JSON.stringify(bolData.error, null, 2));
+      }
+      if (bolData?.errors?.length > 0) {
+        console.error(`${logPrefix} BOL API returned errors array:`, JSON.stringify(bolData.errors, null, 2));
+      }
+
+      bolInstId = bolData?.data?.bolInfo?.bolInstId ?? null;
+      console.log(`${logPrefix} Extracted bolInstId: ${bolInstId ?? 'NULL — THIS IS THE PROBLEM'}`);
+
+      if (!bolResponse.ok) {
         const errorMsg =
-          bolData.error?.message ??
-          bolData.errors?.[0]?.message ??
+          bolData?.error?.message ??
+          bolData?.errors?.[0]?.message ??
           `BOL creation failed (HTTP ${bolResponse.status})`;
+        console.error(`${logPrefix} HTTP ERROR — Status ${bolResponse.status}, Message: ${errorMsg}`);
         throw new Error(errorMsg);
       }
 
+      if (!bolInstId) {
+        console.error(`${logPrefix} CRITICAL: BOL response was HTTP 200-ish but NO bolInstId found in response`);
+        console.error(`${logPrefix} Full response body for inspection:`, JSON.stringify(bolData, null, 2));
+        throw new Error('BOL creation succeeded but no bolInstId returned in response');
+      }
+
       pkupTrmnlSic = bolData.data?.bolInfo?.pkupTrmnlSic ?? null;
+      console.log(`${logPrefix} BOL created successfully — bolInstId: ${bolInstId}, pkupTrmnlSic: ${pkupTrmnlSic}`);
+
     } catch (err: any) {
       bolError = err?.message || 'BOL creation failed';
-      console.error(`[XPO Adapter] BOL creation failed for quote ${quote.id}:`, bolError);
+      console.error(`${logPrefix} ═══════════════════════════════════════════════`);
+      console.error(`${logPrefix} BOL CREATION FAILED:`);
+      console.error(`${logPrefix} Error message: ${bolError}`);
+      console.error(`${logPrefix} Error stack:`, err?.stack);
+      console.error(`${logPrefix} bolData at time of failure:`, JSON.stringify(bolData, null, 2));
+      console.error(`${logPrefix} ═══════════════════════════════════════════════`);
       // DO NOT THROW — shipment creation must continue
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // 4. FETCH BOL PDF + LABELS — NON-BLOCKING (only if BOL succeeded)
+    // 4. FETCH BOL PDF + LABELS — NON-BLOCKING
     // ═══════════════════════════════════════════════════════════════════════
     let bolPdfBase64: string | null = null;
     let labelPdfBase64: string | null = null;
 
     if (bolInstId) {
       const totalPieces = commodityLines.reduce((sum: number, c: any) => sum + (c.pieceCnt || 1), 0);
+      console.log(`${logPrefix} Fetching documents for bolInstId: ${bolInstId}, totalPieces: ${totalPieces}`);
 
       const [pdfResult, labelResult] = await Promise.all([
         // 4a. BOL PDF
-        fetch(
-          `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/pdf?testMode=${testMode}`,
-          { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
-        ).then(async (res) => {
-          if (!res.ok) return null;
-          const data = await res.json();
-          return data.data?.bolpdf?.contentType ?? null;
-        }).catch((err) => {
-          console.error(`[XPO Adapter] BOL PDF fetch failed:`, err);
-          return null;
-        }),
+        (async () => {
+          const pdfUrl = `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/pdf?testMode=${testMode}`;
+          console.log(`${logPrefix} GET BOL PDF: ${pdfUrl}`);
+          try {
+            const res = await fetch(pdfUrl, {
+              headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
+            });
+            console.log(`${logPrefix} BOL PDF response status: ${res.status}`);
+            if (!res.ok) {
+              console.error(`${logPrefix} BOL PDF fetch failed — HTTP ${res.status}`);
+              return null;
+            }
+            const data = await res.json();
+            console.log(`${logPrefix} BOL PDF response:`, JSON.stringify(data, null, 2));
+            const pdfContent = data.data?.bolpdf?.contentType ?? null;
+            console.log(`${logPrefix} BOL PDF extracted contentType: ${pdfContent ?? 'NULL'}`);
+            return pdfContent;
+          } catch (err: any) {
+            console.error(`${logPrefix} BOL PDF fetch exception:`, err.message);
+            return null;
+          }
+        })(),
 
         // 4b. Shipping Labels
-        fetch(
-          `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/shippinglabels/pdf?testMode=${testMode}`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-              Accept: 'application/json',
-            },
-            body: JSON.stringify({
-              nbrOfLabels: totalPieces,
-              labelPosition: 1,
-              printerSettings: 'Normal Printer Settings',
-              bolInstId: String(bolInstId),
-            }),
+        (async () => {
+          const labelUrl = `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/shippinglabels/pdf?testMode=${testMode}`;
+          const labelBody = {
+            nbrOfLabels: totalPieces,
+            labelPosition: 1,
+            printerSettings: 'Normal Printer Settings',
+            bolInstId: String(bolInstId),
+          };
+          console.log(`${logPrefix} POST Shipping Labels: ${labelUrl}`);
+          console.log(`${logPrefix} Label request body:`, JSON.stringify(labelBody, null, 2));
+          try {
+            const res = await fetch(labelUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/json',
+              },
+              body: JSON.stringify(labelBody),
+            });
+            console.log(`${logPrefix} Label response status: ${res.status}`);
+            if (!res.ok) {
+              console.error(`${logPrefix} Label fetch failed — HTTP ${res.status}`);
+              return null;
+            }
+            const data = await res.json();
+            console.log(`${logPrefix} Label response:`, JSON.stringify(data, null, 2));
+            const labelContent = data.data?.shippingLabel?.contentType ?? null;
+            console.log(`${logPrefix} Label extracted contentType: ${labelContent ?? 'NULL'}`);
+            return labelContent;
+          } catch (err: any) {
+            console.error(`${logPrefix} Label fetch exception:`, err.message);
+            return null;
           }
-        ).then(async (res) => {
-          if (!res.ok) return null;
-          const data = await res.json();
-          return data.data?.shippingLabel?.contentType ?? null;
-        }).catch((err) => {
-          console.error(`[XPO Adapter] Label fetch failed:`, err);
-          return null;
-        }),
+        })(),
       ]);
 
       bolPdfBase64 = pdfResult;
       labelPdfBase64 = labelResult;
+      console.log(`${logPrefix} Documents fetched — BOL PDF: ${bolPdfBase64 ? 'YES' : 'NO'}, Labels: ${labelPdfBase64 ? 'YES' : 'NO'}`);
+    } else {
+      console.log(`${logPrefix} Skipping PDF/Label fetch — no bolInstId available`);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // 5. RETURN BOL DETAILS (partial OK — shipment creation will continue)
+    // 5. RETURN
     // ═══════════════════════════════════════════════════════════════════════
-    return {
+    const result = {
       raw:          { bol: bolData, bolError },
       bolId:        bolInstId,
       proNumber:    bolData?.data?.bolInfo?.proNbr ?? null,
@@ -868,8 +965,14 @@ export class XPOAdapter implements CarrierAdapter {
       bolPdfBase64,
       labelPdfBase64,
     };
-  }
 
+    console.log(`${logPrefix} ═══════════════════════════════════════════════`);
+    console.log(`${logPrefix} FINAL RETURN OBJECT:`);
+    console.log(JSON.stringify(result, null, 2));
+    console.log(`${logPrefix} ═══════════════════════════════════════════════`);
+
+    return result;
+  }
   async cancelShipment(bolInstId: string): Promise<any> {
       const token = await this.getAuthToken();
       const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
