@@ -624,7 +624,6 @@ export class XPOAdapter implements CarrierAdapter {
 
   async createShipment(dto: CreateCarrierShipmentDTO, quote: Quote): Promise<any> {
     const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
-    
     // ═══════════════════════════════════════════════════════════════════════
     // 0. GET AUTH TOKEN (cached, only refreshes when expired)
     // ═══════════════════════════════════════════════════════════════════════
@@ -702,7 +701,7 @@ export class XPOAdapter implements CarrierAdapter {
     if (dto.tailgateDelivery) additionalService.push({ accsrlCode: 'DLG', prepaidOrCollect: 'P' });
 
     // ═══════════════════════════════════════════════════════════════════════
-    // 2. BUILD & SEND BOL PAYLOAD
+    // 2. BUILD BOL PAYLOAD
     // ═══════════════════════════════════════════════════════════════════════
     const bolPayload: any = {
       autoAssignPro: true,
@@ -763,81 +762,109 @@ export class XPOAdapter implements CarrierAdapter {
       },
     };
 
-    const bolUrl = `${this.baseUrl}/billoflading/1.0/billsoflading?testMode=${testMode}`;
-    const bolResponse = await fetch(bolUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization:  `Bearer ${token}`,
-        Accept:         'application/json',
-      },
-      body: JSON.stringify(bolPayload),
-    });
+    // ═══════════════════════════════════════════════════════════════════════
+    // 3. CREATE BOL — NON-BLOCKING (shipment must succeed even if BOL fails)
+    // ═══════════════════════════════════════════════════════════════════════
+    let bolData: any = null;
+    let bolInstId: string | null = null;
+    let bolError: string | null = null;
+    let pkupTrmnlSic: string | null = null;
 
-    const bolData = await bolResponse.json();
-    const bolInstId = bolData.data?.bolInfo?.bolInstId;
+    try {
+      const bolUrl = `${this.baseUrl}/billoflading/1.0/billsoflading?testMode=${testMode}`;
+      const bolResponse = await fetch(bolUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization:  `Bearer ${token}`,
+          Accept:         'application/json',
+        },
+        body: JSON.stringify(bolPayload),
+      });
 
-    if (!bolResponse.ok || !bolInstId) {
-      const errorMsg =
-        bolData.error?.message ??
-        bolData.errors?.[0]?.message ??
-        'Unknown BOL error';
-      throw new BadRequestException(`XPO BOL creation failed: ${errorMsg}`);
+      bolData = await bolResponse.json();
+      bolInstId = bolData.data?.bolInfo?.bolInstId ?? null;
+
+      if (!bolResponse.ok || !bolInstId) {
+        const errorMsg =
+          bolData.error?.message ??
+          bolData.errors?.[0]?.message ??
+          `BOL creation failed (HTTP ${bolResponse.status})`;
+        throw new Error(errorMsg);
+      }
+
+      pkupTrmnlSic = bolData.data?.bolInfo?.pkupTrmnlSic ?? null;
+    } catch (err: any) {
+      bolError = err?.message || 'BOL creation failed';
+      console.error(`[XPO Adapter] BOL creation failed for quote ${quote.id}:`, bolError);
+      // DO NOT THROW — shipment creation must continue
     }
 
-    const pkupTrmnlSic = bolData.data?.bolInfo?.pkupTrmnlSic ?? null;
+    // ═══════════════════════════════════════════════════════════════════════
+    // 4. FETCH BOL PDF + LABELS — NON-BLOCKING (only if BOL succeeded)
+    // ═══════════════════════════════════════════════════════════════════════
+    let bolPdfBase64: string | null = null;
+    let labelPdfBase64: string | null = null;
+
+    if (bolInstId) {
+      const totalPieces = commodityLines.reduce((sum: number, c: any) => sum + (c.pieceCnt || 1), 0);
+
+      const [pdfResult, labelResult] = await Promise.all([
+        // 4a. BOL PDF
+        fetch(
+          `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/pdf?testMode=${testMode}`,
+          { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
+        ).then(async (res) => {
+          if (!res.ok) return null;
+          const data = await res.json();
+          return data.data?.bolpdf?.contentType ?? null;
+        }).catch((err) => {
+          console.error(`[XPO Adapter] BOL PDF fetch failed:`, err);
+          return null;
+        }),
+
+        // 4b. Shipping Labels
+        fetch(
+          `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/shippinglabels/pdf?testMode=${testMode}`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+            body: JSON.stringify({
+              nbrOfLabels: totalPieces,
+              labelPosition: 1,
+              printerSettings: 'Normal Printer Settings',
+              bolInstId: String(bolInstId),
+            }),
+          }
+        ).then(async (res) => {
+          if (!res.ok) return null;
+          const data = await res.json();
+          return data.data?.shippingLabel?.contentType ?? null;
+        }).catch((err) => {
+          console.error(`[XPO Adapter] Label fetch failed:`, err);
+          return null;
+        }),
+      ]);
+
+      bolPdfBase64 = pdfResult;
+      labelPdfBase64 = labelResult;
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // 3. FETCH BOL PDF + LABELS IN PARALLEL
-    // ═══════════════════════════════════════════════════════════════════════
-    const totalPieces = commodityLines.reduce((sum: number, c: any) => sum + (c.pieceCnt || 1), 0);
-
-    const [bolPdfBase64, labelPdfBase64] = await Promise.all([
-      // 3a. BOL PDF
-      fetch(
-        `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/pdf?testMode=${testMode}`,
-        { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
-      ).then(async (res) => {
-        if (!res.ok) return null;
-        const data = await res.json();
-        return data.data?.bolpdf?.contentType ?? null;
-      }).catch(() => null),
-
-      // 3b. Shipping Labels
-      fetch(
-        `${this.baseUrl}/billoflading/1.0/billsoflading/${bolInstId}/shippinglabels/pdf?testMode=${testMode}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-            Accept: 'application/json',
-          },
-          body: JSON.stringify({
-            nbrOfLabels: totalPieces,
-            labelPosition: 1,
-            printerSettings: 'Normal Printer Settings',
-            bolInstId: String(bolInstId),
-          }),
-        }
-      ).then(async (res) => {
-        if (!res.ok) return null;
-        const data = await res.json();
-        return data.data?.shippingLabel?.contentType ?? null;
-      }).catch(() => null),
-    ]);
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // 4. RETURN BOL DETAILS
+    // 5. RETURN BOL DETAILS (partial OK — shipment creation will continue)
     // ═══════════════════════════════════════════════════════════════════════
     return {
-      raw:          { bol: bolData },
+      raw:          { bol: bolData, bolError },
       bolId:        bolInstId,
-      proNumber:    bolData.data?.bolInfo?.proNbr ?? null,
+      proNumber:    bolData?.data?.bolInfo?.proNbr ?? null,
       pkupTrmnlSic,
-      pkupConfNbr:  bolData.data?.bolInfo?.pkupConfNbr ?? null,
-      pkupCallDate: bolData.data?.bolInfo?.pkupCallDate ?? null,
-      pkupCallSeq:  bolData.data?.bolInfo?.pkupCallSeq ?? null,
+      pkupConfNbr:  bolData?.data?.bolInfo?.pkupConfNbr ?? null,
+      pkupCallDate: bolData?.data?.bolInfo?.pkupCallDate ?? null,
+      pkupCallSeq:  bolData?.data?.bolInfo?.pkupCallSeq ?? null,
       bolPdfBase64,
       labelPdfBase64,
     };
