@@ -10,7 +10,7 @@ export class SessionAuthGuard implements CanActivate {
     async canActivate(context: ExecutionContext): Promise<boolean> {
         const request = context.switchToHttp().getRequest();
         const userId = request.session?.userId;
-
+        
         if (!userId) {
             throw new BadRequestException({
                 message: "User session not found. Please login first.",

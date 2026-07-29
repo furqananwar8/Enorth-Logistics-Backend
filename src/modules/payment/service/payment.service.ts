@@ -12,6 +12,7 @@ import { TransactionStatus, TransactionType } from 'src/common/enum/wallet';
 import { Company } from 'src/entities/company.entity';
 import { Currency, SquareClient, SquareEnvironment } from 'square';
 import { randomUUID } from 'crypto';
+import { getSquareErrorMessage } from 'src/utils/get-square-error-message';
 
 @Injectable()
 export class PaymentService {
@@ -166,37 +167,30 @@ export class PaymentService {
     session: SessionData,
     payload: {
       cardId: string;
-      amount: number;      // e.g., 5000.00
-      currency: string;    // "USD" or "CAD"
+      amount: number;
+      currency: string;
     },
   ): Promise<any> {
     const ctx = await this.requestContextService.resolve({ session, em: this.em });
 
-    // ── 1. Determine Square charge vs. wallet credit ───────────────────────
     const depositCurrency = payload.currency.toUpperCase();
     let squareAmountCents: number;
     let squareCurrency = 'CAD';
     let walletCreditAmount: number;
 
     if (depositCurrency === 'USD') {
-      // Square account is CAD-only: convert for the charge
       squareAmountCents = await this.convertUsdToCadCents(payload.amount);
-      walletCreditAmount = payload.amount; // Wallet keeps the original USD
+      walletCreditAmount = payload.amount;
     } else if (depositCurrency === 'CAD') {
       squareAmountCents = Math.round(payload.amount * 100);
-      walletCreditAmount = payload.amount; // Wallet keeps the original CAD
+      walletCreditAmount = payload.amount;
     } else {
       throw new BadRequestException('Unsupported currency. Only USD and CAD are supported.');
     }
 
-    // ── 2. Pre-flight validations ────────────────────────────────────────
+    // ── PRE-FLIGHT VALIDATIONS (before any DB write) ─────────────────
     if (!ctx.user.squareCustomerId) {
       throw new BadRequestException('No Square customer found for user');
-    }
-
-    const card = ctx?.company?.savedCards?.find((c) => c.id === payload.cardId);
-    if (!card) {
-      throw new BadRequestException('Invalid cardId');
     }
 
     if (!payload.amount || payload.amount <= 0) {
@@ -207,6 +201,18 @@ export class PaymentService {
       throw new BadRequestException('Minimum amount is 50 cents');
     }
 
+    // Prevent DB numeric overflow (your column is numeric(12,2) → max ~9,999,999,999.99)
+    // Also prevents unreasonably large topups before hitting Square
+    const MAX_AMOUNT = 999_999.99;
+    if (payload.amount > MAX_AMOUNT) {
+      throw new BadRequestException('Deposit amount is too large. Please contact support for assistance.');
+    }
+
+    const card = ctx?.company?.savedCards?.find((c) => c.id === payload.cardId);
+    if (!card) {
+      throw new BadRequestException('Invalid cardId');
+    }
+
     const savedCard = await this.em.findOne(SavedCard, {
       squareCardId: card.squareCardId,
       company: ctx.company,
@@ -215,7 +221,7 @@ export class PaymentService {
       throw new BadRequestException('Payment method not found or not owned by user');
     }
 
-    // ── 3. Create PENDING transaction ──────────────────────────────────────
+    // ── 3. Create PENDING transaction ────────────────────────────────
     const pendingTx = await this.em.transactional(async (em: any) => {
       const wallet = await this.getOrCreateWallet(ctx.company, em);
       const transaction = em.create(WalletTransaction, {
@@ -234,7 +240,7 @@ export class PaymentService {
       return transaction;
     });
 
-    // ── 4. Call Square (external, non-transactional) ─────────────────────
+    // ── 4. Call Square (external, non-transactional) ─────────────────
     let payment: any;
     try {
       const response = await this.square.payments.create({
@@ -251,20 +257,20 @@ export class PaymentService {
       });
       payment = response.payment;
     } catch (error: any) {
-      // ── 5a. Square failed → mark FAILED ────────────────────────────────
+      const { message, code } = getSquareErrorMessage(error);
+
       await this.em.transactional(async (em) => {
         const tx = await em.findOne(WalletTransaction, pendingTx.id);
         if (tx) {
           tx.status = TransactionStatus.FAILED;
-          tx.failureReason = error.message || error.result?.errors?.[0]?.detail || 'Payment failed';
+          tx.failureReason = message;
         }
       });
-      throw new BadRequestException(
-        `Payment failed: ${error.message || error.result?.errors?.[0]?.detail}`
-      );
+
+      throw new BadRequestException(message);
     }
 
-    // ── 5b. Square succeeded → finalize ──────────────────────────────────
+    // ── 5b. Square succeeded → finalize ─────────────────────────────
     if (payment?.status === 'COMPLETED' || payment?.status === 'APPROVED') {
       const finalized = await this.em.transactional(async (em) => {
         const tx = await em.findOne(
@@ -279,8 +285,6 @@ export class PaymentService {
         const wallet = tx.wallet;
         tx.status = TransactionStatus.COMPLETED;
         tx.squarePaymentId = payment.id;
-
-        // Credit the wallet with the ORIGINAL currency amount, NOT the converted CAD
         wallet.balance! += walletCreditAmount;
         wallet.totalDeposited! += walletCreditAmount;
         tx.balanceAfter = wallet.balance;
@@ -305,7 +309,7 @@ export class PaymentService {
       };
     }
 
-    // ── 5c. Square PENDING → update record ───────────────────────────────
+    // ── 5c. Square PENDING → update record ──────────────────────────
     if (payment?.status === 'PENDING') {
       await this.em.transactional(async (em) => {
         const tx = await em.findOne(WalletTransaction, pendingTx.id);
@@ -322,7 +326,7 @@ export class PaymentService {
       };
     }
 
-    // ── 5d. Any other status → mark FAILED ───────────────────────────────
+    // ── 5d. Any other status → mark FAILED ──────────────────────────
     await this.em.transactional(async (em) => {
       const tx = await em.findOne(WalletTransaction, pendingTx.id);
       if (tx) {
