@@ -672,11 +672,23 @@ export class XPOAdapter implements CarrierAdapter {
     const pad = (n: number) => String(n).padStart(2, '0');
     const dateStr = `${shipDate.getFullYear()}-${pad(shipDate.getMonth() + 1)}-${pad(shipDate.getDate())}`;
 
+    // const readyTime = this.parseTimeStr(fromAddress.palletShippingReadyTime, 9);
+    // const closeTime = this.parseTimeStr(fromAddress.palletShippingCloseTime, 17);
     const readyTime = this.parseTimeStr(fromAddress.palletShippingReadyTime, 9);
-    const closeTime = this.parseTimeStr(fromAddress.palletShippingCloseTime, 17);
+    let closeTime = this.parseTimeStr(fromAddress.palletShippingCloseTime, 17);
 
-    const pkupDateISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00.000`;
-    const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00.000`;
+    // Guardrail: dock close must be AFTER ready time
+    if (closeTime.h < readyTime.h || (closeTime.h === readyTime.h && closeTime.m <= readyTime.m)) {
+      console.warn(`${logPrefix} Close time (${pad(closeTime.h)}:${pad(closeTime.m)}) is before or equal to ready time (${pad(readyTime.h)}:${pad(readyTime.m)}). Defaulting close time to 17:00.`);
+      closeTime = { h: 17, m: 0 };
+    }
+
+    const pkupDateISO  = `${dateStr}T00:00:00.000`;   // ← FIX 1: midnight
+    const pkupTimeISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00.000`;
+    const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00.000`; 
+
+    // const pkupDateISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00.000`;
+    // const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00.000`;
 
     console.log(`${logPrefix} Pickup window — Ready: ${pkupDateISO}, Dock Close: ${dockCloseISO}`);
 
