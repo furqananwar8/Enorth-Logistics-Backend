@@ -668,12 +668,16 @@ export class XPOAdapter implements CarrierAdapter {
       );
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // FIX: Build pickup times correctly for XPO
+    // pkupDate  = date ONLY (no time) — "2026-07-30"
+    // pkupTime  = full datetime with ready time — "2026-07-30T09:00:00.000"
+    // dockClose = full datetime with close time — "2026-07-30T17:00:00.000"
+    // ═══════════════════════════════════════════════════════════════════════
     const shipDate = new Date(dto.shipDate);
     const pad = (n: number) => String(n).padStart(2, '0');
     const dateStr = `${shipDate.getFullYear()}-${pad(shipDate.getMonth() + 1)}-${pad(shipDate.getDate())}`;
 
-    // const readyTime = this.parseTimeStr(fromAddress.palletShippingReadyTime, 9);
-    // const closeTime = this.parseTimeStr(fromAddress.palletShippingCloseTime, 17);
     const readyTime = this.parseTimeStr(fromAddress.palletShippingReadyTime, 9);
     let closeTime = this.parseTimeStr(fromAddress.palletShippingCloseTime, 17);
 
@@ -683,15 +687,16 @@ export class XPOAdapter implements CarrierAdapter {
       closeTime = { h: 17, m: 0 };
     }
 
-    const pkupDateISO  = `${dateStr}T00:00:00.000`;   // ← FIX 1: midnight
+    // FIX 1: pkupDate = date string only (no time component)
+    const pkupDateISO  = dateStr;  // "2026-07-30"
+
+    // FIX 2: pkupTime = full datetime with READY time
     const pkupTimeISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00.000`;
-    const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00.000`; 
 
-    // const pkupDateISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00.000`;
-    // const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00.000`;
+    // FIX 3: dockCloseTime = full datetime with CLOSE time
+    const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00.000`;
 
-    console.log(`${logPrefix} Pickup window — Ready: ${pkupDateISO}, Dock Close: ${dockCloseISO}`);
-
+    console.log(`${logPrefix} Pickup window — Date: ${pkupDateISO}, Ready: ${pkupTimeISO}, Dock Close: ${dockCloseISO}`);
     const [firstName, ...lastParts] = (fromAddress.contactName ?? 'Freight Shipper').split(' ');
     const lastName = lastParts.join(' ') || 'Shipper';
 
