@@ -628,7 +628,7 @@ export class XPOAdapter implements CarrierAdapter {
     const logPrefix = `[XPO][Quote:${quoteId}]`;
 
     // ═══════════════════════════════════════════════════════════════════════
-    // 0. GET AUTH TOKEN
+    // 0. GET AUTH TOKEN (cached, only refreshes when expired)
     // ═══════════════════════════════════════════════════════════════════════
     console.log(`${logPrefix} Starting shipment creation. Test mode: ${testMode}`);
     const token = await this.getAuthToken();
@@ -654,6 +654,21 @@ export class XPOAdapter implements CarrierAdapter {
       throw new BadRequestException('Ship date is required');
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // FIX: XPO does not allow same-day pickup — must be tomorrow or later
+    // ═══════════════════════════════════════════════════════════════════════
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const shipDateObj = new Date(dto.shipDate);
+    shipDateObj.setHours(0, 0, 0, 0);
+
+    if (shipDateObj <= today) {
+      console.error(`${logPrefix} VALIDATION FAILED: Ship date ${dto.shipDate} is today or in the past. XPO requires pickup to be scheduled for tomorrow or later.`);
+      throw new BadRequestException(
+        `Pickup date ${dto.shipDate} is today or in the past. XPO requires pickup to be scheduled for tomorrow or later.`
+      );
+    }
+
     if (this.isTooFarInFuture(dto.shipDate)) {
       console.error(`${logPrefix} VALIDATION FAILED: Ship date ${dto.shipDate} > 30 days future`);
       throw new BadRequestException(
@@ -670,7 +685,7 @@ export class XPOAdapter implements CarrierAdapter {
 
     // ═══════════════════════════════════════════════════════════════════════
     // FIX: Build pickup times correctly for XPO
-    // pkupDate  = date ONLY (no time) — "2026-07-30"
+    // pkupDate  = full ISO datetime at midnight — "2026-07-30T00:00:00.000"
     // pkupTime  = full datetime with ready time — "2026-07-30T09:00:00.000"
     // dockClose = full datetime with close time — "2026-07-30T17:00:00.000"
     // ═══════════════════════════════════════════════════════════════════════
@@ -687,16 +702,12 @@ export class XPOAdapter implements CarrierAdapter {
       closeTime = { h: 17, m: 0 };
     }
 
-    // FIX 1: pkupDate = date string only (no time component)
-    const pkupDateISO  = `${dateStr}T00:00:00.000`;  // "2026-07-30"
-
-    // FIX 2: pkupTime = full datetime with READY time
-    const pkupTimeISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00.000`;
-
-    // FIX 3: dockCloseTime = full datetime with CLOSE time
-    const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00.000`;
+    const pkupDateISO  = `${dateStr}T00:00:00.000`;  // "2026-07-30T00:00:00.000"
+    const pkupTimeISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00.000`;  // "2026-07-30T09:00:00.000"
+    const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00.000`;  // "2026-07-30T17:00:00.000"
 
     console.log(`${logPrefix} Pickup window — Date: ${pkupDateISO}, Ready: ${pkupTimeISO}, Dock Close: ${dockCloseISO}`);
+
     const [firstName, ...lastParts] = (fromAddress.contactName ?? 'Freight Shipper').split(' ');
     const lastName = lastParts.join(' ') || 'Shipper';
 
@@ -805,7 +816,7 @@ export class XPOAdapter implements CarrierAdapter {
     console.log(`${logPrefix} ═══════════════════════════════════════════════`);
 
     // ═══════════════════════════════════════════════════════════════════════
-    // 3. CREATE BOL — NON-BLOCKING
+    // 3. CREATE BOL — NON-BLOCKING (shipment must succeed even if BOL fails)
     // ═══════════════════════════════════════════════════════════════════════
     let bolData: any = null;
     let bolInstId: string | null = null;
@@ -889,7 +900,7 @@ export class XPOAdapter implements CarrierAdapter {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // 4. FETCH BOL PDF + LABELS — NON-BLOCKING
+    // 4. FETCH BOL PDF + LABELS — NON-BLOCKING (only if BOL succeeded)
     // ═══════════════════════════════════════════════════════════════════════
     let bolPdfBase64: string | null = null;
     let labelPdfBase64: string | null = null;
@@ -969,7 +980,7 @@ export class XPOAdapter implements CarrierAdapter {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // 5. RETURN
+    // 5. RETURN BOL DETAILS (partial OK — shipment creation will continue)
     // ═══════════════════════════════════════════════════════════════════════
     const result = {
       raw:          { bol: bolData, bolError },
@@ -990,6 +1001,7 @@ export class XPOAdapter implements CarrierAdapter {
 
     return result;
   }
+  
   async cancelShipment(bolInstId: string): Promise<any> {
       const token = await this.getAuthToken();
       const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
