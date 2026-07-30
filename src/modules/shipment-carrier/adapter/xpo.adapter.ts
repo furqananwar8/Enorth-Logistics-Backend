@@ -662,12 +662,6 @@ export class XPOAdapter implements CarrierAdapter {
     const shipDateObj = new Date(dto.shipDate);
     shipDateObj.setHours(0, 0, 0, 0);
 
-    if (shipDateObj <= today) {
-      console.error(`${logPrefix} VALIDATION FAILED: Ship date ${dto.shipDate} is today or in the past. XPO requires pickup to be scheduled for tomorrow or later.`);
-      throw new BadRequestException(
-        `Pickup date ${dto.shipDate} is today or in the past. XPO requires pickup to be scheduled for tomorrow or later.`
-      );
-    }
 
     if (this.isTooFarInFuture(dto.shipDate)) {
       console.error(`${logPrefix} VALIDATION FAILED: Ship date ${dto.shipDate} > 30 days future`);

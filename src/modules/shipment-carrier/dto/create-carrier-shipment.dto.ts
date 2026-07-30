@@ -66,9 +66,6 @@ export class CreateCarrierShipmentDTO {
   selectedRate!: SelectedRateDto;
 
   @IsDateString()
-  @IsFutureDateTime({
-    message: 'shipDate must be greater than current datetime',
-  })
   shipDate!: string;
 
   @IsBoolean()
