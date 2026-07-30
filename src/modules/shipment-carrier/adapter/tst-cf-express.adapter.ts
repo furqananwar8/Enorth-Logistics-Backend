@@ -224,7 +224,7 @@ export class TSTCFExpressAdapter implements CarrierAdapter {
   async createShipment(quote: any, selectedRate: any): Promise<any> {
     try {
       const payload = this.mapper.mapShipment(quote, selectedRate);
-
+      console.log({payload})
       payload.login = this.login || '';
       payload.passwd = this.password || '';
       
@@ -235,7 +235,7 @@ export class TSTCFExpressAdapter implements CarrierAdapter {
       });
 
       const xmlPayload = builder.buildObject({ bolpickuprequest: payload });
-
+      console.log({xmlPayload})
       // FIX: removed trailing space
       const response = await fetch(`${this.baseUrl}/xml/bol-pickup`, {
         method: 'POST',
@@ -253,7 +253,8 @@ export class TSTCFExpressAdapter implements CarrierAdapter {
       }
 
       const parsed = await parseStringPromise(responseText, { explicitArray: false });
-
+      console.log({parsed})
+      
       const results = parsed.bolpuresults 
         || parsed.bolpickupresults 
         || parsed.bolresults 
@@ -281,6 +282,7 @@ export class TSTCFExpressAdapter implements CarrierAdapter {
     };
 
     } catch (err: any) {
+      console.log({err})
       console.error('>>> TST fetch threw:', err.message);
       throw err;
     }
