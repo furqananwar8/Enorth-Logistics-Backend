@@ -688,7 +688,7 @@ export class XPOAdapter implements CarrierAdapter {
     }
 
     // FIX 1: pkupDate = date string only (no time component)
-    const pkupDateISO  = dateStr;  // "2026-07-30"
+    const pkupDateISO  = `${dateStr}T00:00:00.000`;  // "2026-07-30"
 
     // FIX 2: pkupTime = full datetime with READY time
     const pkupTimeISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00.000`;
@@ -787,7 +787,7 @@ export class XPOAdapter implements CarrierAdapter {
         ...(additionalService.length > 0 ? { additionalService } : {}),
         pickupInfo: {
           pkupDate:      pkupDateISO,
-          pkupTime:      pkupDateISO,
+          pkupTime:      pkupTimeISO,
           dockCloseTime: dockCloseISO,
           contact: {
             companyName: fromAddress.companyName ?? '',
