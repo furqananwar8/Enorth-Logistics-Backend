@@ -4,6 +4,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Quote } from 'src/entities/quote.entity';
 import { getEnv } from 'src/utils/getEnv';
 import { ENV } from 'src/common/constants/env';
+import { getUtcOffset } from 'src/utils/getUtcOffset';
 
 // ============================================================================
 // XPO API TYPES
@@ -573,12 +574,11 @@ export class XPOAdapter implements CarrierAdapter {
 
   // private toXPOTime = (d: Date): string => this.snapTime(d).toISOString();
 
-  private isWeekend = (dateStr: string): boolean => {
-    const [year, month, day] = dateStr.split('-').map(Number);
-    const date = new Date(year, month - 1, day); // month is 0-indexed
-    const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
-    return dayOfWeek === 0 || dayOfWeek === 6;
-  };
+  private isWeekend(dateStr: string): boolean {
+    const date = new Date(dateStr);
+    const day = date.getDay(); // 0 = Sunday, 6 = Saturday
+    return day === 0 || day === 6;
+  }
 
   private parseTimeStr = (timeStr: string | null | undefined, fallbackHour: number): { h: number; m: number } => {
     if (!timeStr) return { h: fallbackHour, m: 0 };
@@ -683,15 +683,13 @@ export class XPOAdapter implements CarrierAdapter {
       );
     }
 
+   // ═══════════════════════════════════════════════════════════════════════
+    // FIX: XPO expects full ISO datetime (with UTC offset) for pkupDate, pkupTime,
+    // and dockCloseTime — and pkupDate must equal pkupTime exactly.
     // ═══════════════════════════════════════════════════════════════════════
-    // FIX: Build pickup times correctly for XPO
-    // pkupDate  = full ISO datetime at midnight — "2026-07-30T00:00:00.000"
-    // pkupTime  = full datetime with ready time — "2026-07-30T09:00:00.000"
-    // dockClose = full datetime with close time — "2026-07-30T17:00:00.000"
-    // ═══════════════════════════════════════════════════════════════════════
-    const shipDate = new Date(dto.shipDate);
     const pad = (n: number) => String(n).padStart(2, '0');
-    const dateStr = `${shipDate.getFullYear()}-${pad(shipDate.getMonth() + 1)}-${pad(shipDate.getDate())}`;
+    const [year, month, day] = dto.shipDate.split('-').map(Number);
+    const dateStr = `${year}-${pad(month)}-${pad(day)}`;
 
     const readyTime = this.parseTimeStr(fromAddress.palletShippingReadyTime, 9);
     let closeTime = this.parseTimeStr(fromAddress.palletShippingCloseTime, 17);
@@ -702,9 +700,12 @@ export class XPOAdapter implements CarrierAdapter {
       closeTime = { h: 17, m: 0 };
     }
 
-    const pkupDateISO  = `${dateStr}T00:00:00.000`;  // "2026-07-30T00:00:00.000"
-    const pkupTimeISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00.000`;  // "2026-07-30T09:00:00.000"
-    const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00.000`;  // "2026-07-30T17:00:00.000"
+    // XPO format: pkupDate === pkupTime, both full ISO datetime with offset;
+    // dockCloseTime same date, later time, same offset
+    const offset = getUtcOffset(fromAddress.address, shipDateObj);
+    const pkupTimeISO  = `${dateStr}T${pad(readyTime.h)}:${pad(readyTime.m)}:00${offset}`;
+    const dockCloseISO = `${dateStr}T${pad(closeTime.h)}:${pad(closeTime.m)}:00${offset}`;
+    const pkupDateISO  = pkupTimeISO; // XPO requires pkupDate to equal pkupTime exactly
 
     console.log(`${logPrefix} Pickup window — Date: ${pkupDateISO}, Ready: ${pkupTimeISO}, Dock Close: ${dockCloseISO}`);
 
@@ -1001,7 +1002,7 @@ export class XPOAdapter implements CarrierAdapter {
 
     return result;
   }
-  
+
   async cancelShipment(bolInstId: string): Promise<any> {
       const token = await this.getAuthToken();
       const testMode = process.env.XPO_TEST_MODE === 'Y' ? 'Y' : 'N';
