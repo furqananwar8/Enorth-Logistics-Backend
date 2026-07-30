@@ -781,7 +781,7 @@ export class QuoteService {
     }
 
 
-    async getAllAgainstCurrentUserCompany(
+  async getAllAgainstCurrentUserCompany(
         session: SessionData,
         params: PaginationParams,
     ) {
@@ -796,14 +796,15 @@ export class QuoteService {
         // 2) Derive pagination params from raw query-string params
         const { search, page, limit, orderBy } = buildQuery(params, allowedFields);
 
-        // ── Helpers: cover full days so "2026-06-09" means the ENTIRE 9th ──────
-       
         // 3) Base filter — always scope to the caller's company
         const filter: any = {};
 
         if (session.role !== ROLES.SUPER_ADMIN) {
             filter.company = this.em.getReference(Company, session.companyId as number);
         }
+
+        // ── NEVER return quotes that already have a carrier assigned ───────────
+        filter.shipment = { carrier: null };
 
         // 4) Optional status filter
         if (params?.status) {
@@ -872,6 +873,7 @@ export class QuoteService {
             };
         }
 
+        // IDs already came from the carrier-null-filtered set, so we just fetch by ID
         const quotes = await this.em.find(
             Quote,
             { id: { $in: ids } },
@@ -883,6 +885,7 @@ export class QuoteService {
                     "addresses.address",
                     "lineItems",
                     "lineItems.units",
+                    "shipment"
                 ],
                 fields: [
                     "name",
@@ -923,6 +926,7 @@ export class QuoteService {
                     // Address-book path
                     "addresses.addressBookEntry.address.country",
                     "addresses.addressBookEntry.address.state",
+                    "shipment.carrier",
 
                     // Line items — keep only the units relation
                     "lineItems.measurementUnit",
@@ -947,7 +951,7 @@ export class QuoteService {
             },
         };
     }
-
+    
     async deleteSingleAgainstCurrentUserCompany(quoteId: number, session: SessionData){
         //1) Get the user reference
         const company = this.em.getReference(Company, session.companyId as number);
