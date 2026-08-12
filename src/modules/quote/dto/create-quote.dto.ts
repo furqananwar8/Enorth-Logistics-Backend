@@ -65,6 +65,10 @@ export class CreateAddressDto {
 
   @IsOptional()
   @IsString()
+  unit?: string;
+
+  @IsOptional()
+  @IsString()
   postalCode?: string;
 
   // FTL only

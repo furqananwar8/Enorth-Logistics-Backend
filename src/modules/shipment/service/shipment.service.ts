@@ -1,5 +1,5 @@
 import { EntityManager } from "@mikro-orm/postgresql";
-import { BadRequestException, Injectable  } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException  } from "@nestjs/common";
 import { SessionData } from "express-session";
 import { CreateShipmentDTO } from "../dto/create-shipment.dto";
 import { Shipment } from "src/entities/shipment.entity";
@@ -42,54 +42,86 @@ export class ShipmentService {
     quote: Quote,
     dto: any,
     session: SessionData
-  ): Promise<Quote> {
+): Promise<Quote> {
     if (!dto?.quote?.quoteType) {
-      throw new BadRequestException("quoteType is required in quote");
+        throw new BadRequestException("quoteType is required in quote");
     }
 
     if (dto.quote.quoteType !== QuoteType.STANDARD) {
-      throw new BadRequestException("Shipment supports only standard quote shipment types");
+        throw new BadRequestException(
+            "Shipment supports only standard quote shipment types"
+        );
     }
 
-   
     const dataWithId = {
         ...dto,
         quote: {
             ...dto.quote,
-            id: quote.id  // ← Add the missing ID
+            id: quote.id
         }
     };
 
     const quoteFactory = new StandardQuoteFactory();
+
     const handler = quoteFactory.update({
         shipmentType: dto.shipmentType,
-        data: dataWithId,  // ← Use the modified data
+        data: dataWithId,
         em: this.em,
         session
     });
 
-    await handler.init();      // Now this.existingQuote will be populated
+    await handler.init();
+   
     await handler.validate();
-    await handler.update();
 
-    return quote;
-  }
+    const updatedQuote = await handler.update();
+
+    return updatedQuote as Quote;
+}
 
   async create(createShipmentDto: CreateShipmentDTO, session: SessionData) {
         //1) Validate and build the quote based on shipment type
         let quote;
 
-        if(!createShipmentDto?.quote?.id) {
-          quote = await this.buildQuote(createShipmentDto, session);
-        } else {
-          const quoteDoc: any = await this.em.findOne(Quote, { id: createShipmentDto.quote.id }, { populate: ["addresses", "addresses.addressBookEntry", "addresses.address", "addresses.addressBookEntry.address", "lineItems", "lineItems.units" ]})
-          
-          if(quoteDoc.quoteType !== QuoteType.STANDARD) {
-            throw new BadRequestException("Shipment supports only standard quote shipment types");
-          }
 
-          quote = await this.updateQuote(quoteDoc, createShipmentDto, session);
-        }  
+
+        if (!createShipmentDto?.quote?.id) {
+            quote = await this.buildQuote(createShipmentDto, session);
+        } else {
+          
+
+            const quoteDoc: any = await this.em.findOne(
+                Quote,
+                { id: createShipmentDto.quote.id },
+                {
+                    populate: [
+                        "addresses",
+                        "addresses.addressBookEntry",
+                        "addresses.address",
+                        "addresses.addressBookEntry.address",
+                        "lineItems",
+                        "lineItems.units"
+                    ]
+                }
+            );
+
+            if (!quoteDoc) {
+                throw new NotFoundException("Quote not found");
+            }
+
+            if (quoteDoc.quoteType !== QuoteType.STANDARD) {
+                throw new BadRequestException(
+                    "Shipment supports only standard quote shipment types"
+                );
+            }
+
+            quote = await this.updateQuote(
+                quoteDoc,
+                createShipmentDto,
+                session
+            );
+        }
+
 
         //2) Create shipment with the built quote
         const shipment = new Shipment();

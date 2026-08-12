@@ -203,8 +203,7 @@ export class UpdatePackageQuote extends StandardQuote {
                 continue;
             }
 
-            
-            // ADD: support flat addressBookId from DTO
+            // Support flat addressBookId from DTO
             const addressBookId = address.addressBookId ?? address.addressBook?.id;
 
             /**
@@ -224,24 +223,25 @@ export class UpdatePackageQuote extends StandardQuote {
 
                 shippingAddress.addressBookEntry = newBook;
                 shippingAddress.address = null;
-                
+
                 continue;
             }
 
-            // handle manual address
+            // Resolve manual address fields (supports flat or nested `address.address` shape)
+            const addr = address.address || address;
             const manualAddressFields = {
-            address1: address.address1,
-            address2: address.address2,
-            unit: address.unit,
-            postalCode: address.postalCode,
-            city: address.city,
-            state: address.state,
-            country: address.country,
+                address1: addr.address1,
+                address2: addr.address2,
+                unit: addr.unit,
+                postalCode: addr.postalCode,
+                city: addr.city,
+                state: addr.state,
+                country: addr.country,
             };
             const hasManualFields = Object.values(manualAddressFields).some(v => v !== undefined);
 
             if (hasManualFields) {
-                // NEW: if email + contactName are present, create a new AddressBook instead of raw manual
+                // If email + contactName are present, create a new AddressBook instead of raw manual
                 if (address.email && address.contactName) {
                     const newAddress = new Address();
                     wrap(newAddress).assign(manualAddressFields);
@@ -258,11 +258,23 @@ export class UpdatePackageQuote extends StandardQuote {
                         createdBy: this.session.userId,
                         company: this.session.companyId,
                         signature: 1,
-                        locationType: address.locationType ?? 1,
+                        locationType: address.locationType ?? addr.locationTypeId ?? 1,
                     }, { em: this.em });
 
                     this.em.persist(newAddress);
                     this.em.persist(newBook);
+
+                    // ---------------------------------------------
+                    // 🔑 FIX: flush now so newBook gets a real PK
+                    // before we touch shippingAddress's FKs. Without
+                    // this, when multiple ShippingAddress rows in the
+                    // same flush each point at their own pending
+                    // (unsaved) AddressBook, MikroORM's change-set
+                    // batching can drop the FK assignment for all but
+                    // the first row.
+                    // ---------------------------------------------
+
+                    await this.em.flush();
 
                     shippingAddress.addressBookEntry = newBook;
                     shippingAddress.address = null;
@@ -279,6 +291,10 @@ export class UpdatePackageQuote extends StandardQuote {
 
                 if (!shippingAddress.address) {
                     shippingAddress.address = new Address();
+                    // 🔑 FIX: Address isn't cascade-persisted from ShippingAddress
+                    // (only Cascade.REMOVE is configured), so a freshly created
+                    // Address must be persisted explicitly or it won't be inserted.
+                    this.em.persist(shippingAddress.address);
                 }
 
                 wrap(shippingAddress.address).assign(manualAddressFields);
@@ -289,7 +305,7 @@ export class UpdatePackageQuote extends StandardQuote {
 
                 continue;
             }
-            
+
             const entry = shippingAddress.addressBookEntry;
             if (!entry) {
                 this.errors.push(`Address '${address.type}' has no address book entry`);
@@ -313,7 +329,7 @@ export class UpdatePackageQuote extends StandardQuote {
 
                 // Replace the relationship, not a property on the entry
                 shippingAddress.addressBookEntry = newBook;
-                
+
                 // If switching to a different address book, we typically don't patch it in the same request
                 continue;
             }
